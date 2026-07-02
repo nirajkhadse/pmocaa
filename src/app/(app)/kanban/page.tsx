@@ -104,7 +104,7 @@ const PRIORITY_BADGE: Record<string, string> = {
   HIGH: 'bg-orange-100 text-orange-700', CRITICAL: 'bg-red-100 text-red-700',
 }
 
-const REVIEWER_ROLES = new Set(['ADMIN', 'MANAGER', 'PLANNER', 'PROJECT_LEAD', 'WORKSTREAM_LEAD'])
+const REVIEWER_ROLES = new Set(['ADMIN', 'MANAGER', 'PLANNER'])
 
 function timeInStatus(statusChangedAt: string): string {
   const diffMs = Date.now() - new Date(statusChangedAt).getTime()
@@ -358,8 +358,9 @@ export default function KanbanPage() {
 
   const canReview = (task: Task) => {
     if (!user) return false
-    // Block only when someone else assigned this task to the current user
-    if (task.ownerId === user.id && task.assignedById && task.assignedById !== user.id) return false
+    // The person the task is assigned to can never approve/reject their own task,
+    // regardless of role — review rights belong to the assigner, PLANNER, or MANAGER.
+    if (task.ownerId === user.id) return false
     return task.assignedById === user.id || REVIEWER_ROLES.has(user.role)
   }
 
