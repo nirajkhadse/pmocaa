@@ -574,6 +574,14 @@ function calcTaskDailyHours(
   return Object.fromEntries(overlapping.map(d => [d, hpd]))
 }
 
+// A task/strategic-task is considered "active" on a given date when the date falls
+// within its start–end range (inclusive). Items without both dates can't be placed
+// on a specific day, so they're excluded from date-filtered views.
+function isActiveOnDate(startDate: string | null, endDate: string | null, date: string): boolean {
+  if (!startDate || !endDate) return false
+  return startDate.slice(0, 10) <= date && date <= endDate.slice(0, 10)
+}
+
 // ─── Employee Detail Dialog ───────────────────────────────────────────────────
 
 function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
@@ -583,9 +591,30 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
   onLogMeeting: (r: Resource) => void
 }) {
   const [focusedId, setFocusedId] = useState<string | null>(null)
+  const [dateFilter, setDateFilter] = useState('')
+  const [dayResource, setDayResource] = useState<Resource | null>(null)
+  const [dayLoading, setDayLoading] = useState(false)
 
-  // Reset focus when dialog closes or resource changes
-  const handleOpenChange = (v: boolean) => { if (!v) setFocusedId(null); onOpenChange(v) }
+  // Reset focus + date filter when dialog closes or resource changes
+  const handleOpenChange = (v: boolean) => {
+    if (!v) { setFocusedId(null); setDateFilter(''); setDayResource(null) }
+    onOpenChange(v)
+  }
+
+  // Fetch day-scoped task data whenever the date filter changes
+  useEffect(() => {
+    if (!dateFilter || !resource) { setDayResource(null); return }
+    setDayLoading(true)
+    setFocusedId(null)
+    fetch(`/api/resources?from=${dateFilter}&to=${dateFilter}`)
+      .then(r => r.json())
+      .then(d => {
+        const match = Array.isArray(d) ? d.find((r: Resource) => r.id === resource.id) : null
+        setDayResource(match ?? null)
+      })
+      .catch(() => setDayResource(null))
+      .finally(() => setDayLoading(false))
+  }, [dateFilter, resource])
 
   // ALL hooks must be called before any early return (Rules of Hooks)
   const weekDates = useMemo(
@@ -609,8 +638,36 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
 
   const utilBar = Math.min(resource.utilizationPct, 150)
   void utilBar
+
+  // When a date filter is active, scope every list to items active on that specific date
+  const isDateFiltered = !!dateFilter
+  const ownedTasksForList = isDateFiltered
+    ? (dayResource?.ownedTasks ?? []).filter(t => isActiveOnDate(t.startDate, t.endDate, dateFilter))
+    : resource.ownedTasks
+  const strategicTasksForList = isDateFiltered
+    ? (dayResource?.strategicTasks ?? []).filter(t => isActiveOnDate(t.startDate, t.endDate, dateFilter))
+    : (resource.strategicTasks ?? [])
+  const meetingsForList = isDateFiltered
+    ? (dayResource?.meetings ?? [])
+    : (resource.meetings ?? [])
+  const completedTasksForList = isDateFiltered
+    ? (dayResource?.completedTasks ?? []).filter(ct => ct.statusChangedAt?.slice(0, 10) === dateFilter)
+    : (resource.completedTasks ?? [])
+
+  // Hours logged on the filtered date — computed from each task's own date range rather than
+  // dayResource.dailyHoursMap, since the API's from/to parsing and this per-task calc can land
+  // on different UTC days near midnight; summing per-task keeps the figure consistent with the list above.
+  const dayTotalHours = isDateFiltered
+    ? Math.round((
+        [...ownedTasksForList, ...strategicTasksForList].reduce(
+          (s, t) => s + (calcTaskDailyHours({ ...t, estimatedHours: t.estimatedHours || 0 }, [dateFilter])[dateFilter] ?? 0),
+          0
+        ) + meetingsForList.reduce((s, m) => s + m.hours, 0)
+      ) * 10) / 10
+    : 0
+
   const grouped: Record<string, AssignedTask[]> = {}
-  for (const t of resource.ownedTasks) {
+  for (const t of ownedTasksForList) {
     const key = t.workstream.project.name === '__direct_assignments__'
       ? 'Direct Assignments'
       : t.workstream.project.name
@@ -618,7 +675,7 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
     grouped[key].push(t)
   }
 
-  const totalHours = resource.ownedTasks.reduce((s, t) => s + (t.estimatedHours || 0), 0)
+  const totalHours = ownedTasksForList.reduce((s, t) => s + (t.estimatedHours || 0), 0)
   const pendingReqHours = resource.pendingRequestHours ?? 0
 
   const focusedItem = focusedId
@@ -635,7 +692,7 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             <Avatar className="h-9 w-9">
@@ -649,6 +706,19 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
                 {resource.title || ROLE_LABELS[resource.role]}
                 {resource.department && ` · ${resource.department}`}
               </p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Input
+                type="date"
+                value={dateFilter}
+                onChange={e => setDateFilter(e.target.value)}
+                className="h-7 w-[150px] text-xs"
+              />
+              {dateFilter && (
+                <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => setDateFilter('')}>
+                  Clear
+                </Button>
+              )}
             </div>
             <Button
               size="sm"
@@ -702,63 +772,79 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
           />
         </div>
 
-        {/* Day-by-day breakdown */}
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <p className="text-xs font-medium text-muted-foreground">
-              {focusedLabel
-                ? <><span className="text-blue-600 font-semibold">↑ {focusedLabel}</span><span className="text-muted-foreground"> vs total ({focusedTotalHours}h this week)</span></>
-                : 'This week — daily hours (8h/day limit)'}
-            </p>
+        {/* Day-by-day breakdown (hidden while a specific date is selected) */}
+        {!isDateFiltered && (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-xs font-medium text-muted-foreground">
+                {focusedLabel
+                  ? <><span className="text-blue-600 font-semibold">↑ {focusedLabel}</span><span className="text-muted-foreground"> vs total ({focusedTotalHours}h this week)</span></>
+                  : 'This week — daily hours (8h/day limit)'}
+              </p>
+              {focusedId && (
+                <button onClick={() => setFocusedId(null)} className="text-xs text-muted-foreground hover:text-foreground underline">
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-5 gap-1.5">
+              {weekDates.map(date => {
+                const hours = resource.dailyHoursMap[date] ?? 0
+                const taskHrs = focusedTaskMap?.[date] ?? 0
+                const over = hours > resource.dailyCapacityHours
+                const pct      = Math.min(hours   / Math.max(resource.dailyCapacityHours, 1) * 100, 100)
+                const taskPct  = Math.min(taskHrs / Math.max(resource.dailyCapacityHours, 1) * 100, 100)
+                const label = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })
+                const barColor = over ? 'bg-red-400' : pct > 70 ? 'bg-orange-300' : 'bg-green-300'
+                return (
+                  <div key={date} className="text-center space-y-1">
+                    <p className="text-xs text-muted-foreground">{label}</p>
+                    <div className="h-16 bg-muted rounded relative overflow-hidden">
+                      {/* Total bar (dimmed when focused) */}
+                      <div
+                        className={`absolute bottom-0 w-full transition-all ${focusedId ? barColor + ' opacity-40' : (over ? 'bg-red-500' : pct > 70 ? 'bg-orange-400' : 'bg-green-500')}`}
+                        style={{ height: `${Math.max(pct, 4)}%` }}
+                      />
+                      {/* Focused-task overlay */}
+                      {focusedId && taskPct > 0 && (
+                        <div
+                          className="absolute bottom-0 w-full bg-blue-500 transition-all"
+                          style={{ height: `${Math.max(taskPct, 3)}%` }}
+                        />
+                      )}
+                    </div>
+                    <p className={`text-xs font-medium ${over && !focusedId ? 'text-red-600' : ''}`}>
+                      {focusedId
+                        ? taskHrs > 0
+                          ? <><span className="text-blue-600">{Math.round(taskHrs * 10) / 10}h</span><span className="text-muted-foreground">/{Math.round(hours * 10) / 10}h</span></>
+                          : <span className="text-muted-foreground">{Math.round(hours * 10) / 10}h</span>
+                        : `${Math.round(hours * 10) / 10}h`}
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
             {focusedId && (
-              <button onClick={() => setFocusedId(null)} className="text-xs text-muted-foreground hover:text-foreground underline">
-                Clear
-              </button>
+              <p className="text-xs text-muted-foreground mt-1.5 text-center">
+                <span className="inline-block w-2.5 h-2.5 bg-blue-500 rounded-sm mr-1 align-middle" />blue = selected · faded = total load
+              </p>
             )}
           </div>
-          <div className="grid grid-cols-5 gap-1.5">
-            {weekDates.map(date => {
-              const hours = resource.dailyHoursMap[date] ?? 0
-              const taskHrs = focusedTaskMap?.[date] ?? 0
-              const over = hours > resource.dailyCapacityHours
-              const pct      = Math.min(hours   / Math.max(resource.dailyCapacityHours, 1) * 100, 100)
-              const taskPct  = Math.min(taskHrs / Math.max(resource.dailyCapacityHours, 1) * 100, 100)
-              const label = new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })
-              const barColor = over ? 'bg-red-400' : pct > 70 ? 'bg-orange-300' : 'bg-green-300'
-              return (
-                <div key={date} className="text-center space-y-1">
-                  <p className="text-xs text-muted-foreground">{label}</p>
-                  <div className="h-16 bg-muted rounded relative overflow-hidden">
-                    {/* Total bar (dimmed when focused) */}
-                    <div
-                      className={`absolute bottom-0 w-full transition-all ${focusedId ? barColor + ' opacity-40' : (over ? 'bg-red-500' : pct > 70 ? 'bg-orange-400' : 'bg-green-500')}`}
-                      style={{ height: `${Math.max(pct, 4)}%` }}
-                    />
-                    {/* Focused-task overlay */}
-                    {focusedId && taskPct > 0 && (
-                      <div
-                        className="absolute bottom-0 w-full bg-blue-500 transition-all"
-                        style={{ height: `${Math.max(taskPct, 3)}%` }}
-                      />
-                    )}
-                  </div>
-                  <p className={`text-xs font-medium ${over && !focusedId ? 'text-red-600' : ''}`}>
-                    {focusedId
-                      ? taskHrs > 0
-                        ? <><span className="text-blue-600">{Math.round(taskHrs * 10) / 10}h</span><span className="text-muted-foreground">/{Math.round(hours * 10) / 10}h</span></>
-                        : <span className="text-muted-foreground">{Math.round(hours * 10) / 10}h</span>
-                      : `${Math.round(hours * 10) / 10}h`}
-                  </p>
-                </div>
-              )
-            })}
-          </div>
-          {focusedId && (
-            <p className="text-xs text-muted-foreground mt-1.5 text-center">
-              <span className="inline-block w-2.5 h-2.5 bg-blue-500 rounded-sm mr-1 align-middle" />blue = selected · faded = total load
+        )}
+
+        {/* Date-filtered summary */}
+        {isDateFiltered && (
+          <div className="border rounded-lg p-3 bg-muted/30 flex items-center justify-between">
+            <p className="text-sm font-medium">
+              {new Date(dateFilter + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}
             </p>
-          )}
-        </div>
+            <p className="text-xs text-muted-foreground">
+              {dayLoading
+                ? 'Loading…'
+                : `${ownedTasksForList.length + strategicTasksForList.length} task(s) · ${dayTotalHours}h logged`}
+            </p>
+          </div>
+        )}
 
         {/* Task summary card — shown when a task or strategic task is focused */}
         {focusedId && (() => {
@@ -830,7 +916,17 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
 
         {/* Tasks list */}
         <div className="flex-1 overflow-y-auto space-y-4 mt-1">
-          {Object.keys(grouped).length === 0 ? (
+          {isDateFiltered && dayLoading ? (
+            <div className="space-y-2">
+              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 rounded-lg" />)}
+            </div>
+          ) : isDateFiltered &&
+           Object.keys(grouped).length === 0 && strategicTasksForList.length === 0 &&
+           meetingsForList.length === 0 && completedTasksForList.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground text-sm">
+              No tasks, meetings, or completions on this date
+            </div>
+          ) : Object.keys(grouped).length === 0 && !isDateFiltered ? (
             <div className="text-center py-8 text-muted-foreground text-sm">No active tasks assigned</div>
           ) : (
             Object.entries(grouped).map(([projectName, tasks]) => (
@@ -878,19 +974,19 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
           )}
 
           {/* Strategic tasks */}
-          {(resource.strategicTasks?.length ?? 0) > 0 && (
+          {strategicTasksForList.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <Target className="h-3.5 w-3.5 text-purple-500" />
                 <span className="text-xs font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wide">
-                  Strategic Tasks ({resource.strategicTasks!.length})
+                  Strategic Tasks ({strategicTasksForList.length})
                 </span>
                 <span className="text-xs text-muted-foreground ml-auto">
-                  {resource.strategicTasks!.reduce((s, t) => s + (t.estimatedHours || 0), 0)}h total
+                  {strategicTasksForList.reduce((s, t) => s + (t.estimatedHours || 0), 0)}h total
                 </span>
               </div>
               <div className="space-y-1.5">
-                {resource.strategicTasks!.map(st => {
+                {strategicTasksForList.map(st => {
                   const isFocused = focusedId === st.id
                   return (
                     <div
@@ -921,19 +1017,19 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
           )}
 
           {/* Meetings */}
-          {(resource.meetings?.length ?? 0) > 0 && (
+          {meetingsForList.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <CalendarDays className="h-3.5 w-3.5 text-sky-500" />
                 <span className="text-xs font-semibold text-sky-600 dark:text-sky-400 uppercase tracking-wide">
-                  Meetings ({resource.meetings!.length})
+                  Meetings ({meetingsForList.length})
                 </span>
                 <span className="text-xs text-muted-foreground ml-auto">
-                  {resource.meetingHours}h total
+                  {Math.round(meetingsForList.reduce((s, m) => s + m.hours, 0) * 10) / 10}h total
                 </span>
               </div>
               <div className="space-y-1.5">
-                {resource.meetings!.map(m => {
+                {meetingsForList.map(m => {
                   const isFocused = focusedId === m.id
                   return (
                     <div
@@ -953,8 +1049,8 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
             </div>
           )}
 
-          {/* Pending requests */}
-          {(resource.assignedRequests?.length ?? 0) > 0 && (
+          {/* Pending requests — not tied to a specific date, hidden while date-filtered */}
+          {!isDateFiltered && (resource.assignedRequests?.length ?? 0) > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <Clock className="h-3.5 w-3.5 text-amber-500" />
@@ -986,17 +1082,17 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
             </div>
           )}
 
-          {/* Completed tasks (last 60 days) with early/late badge */}
-          {(resource.completedTasks?.length ?? 0) > 0 && (
+          {/* Completed tasks — last 60 days, or exact matches when date-filtered */}
+          {completedTasksForList.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <ClipboardCheck className="h-3.5 w-3.5 text-green-600" />
                 <span className="text-xs font-semibold text-green-700 dark:text-green-400 uppercase tracking-wide">
-                  Completed Recently ({resource.completedTasks!.length})
+                  {isDateFiltered ? `Completed (${completedTasksForList.length})` : `Completed Recently (${completedTasksForList.length})`}
                 </span>
               </div>
               <div className="space-y-1.5">
-                {resource.completedTasks!.map(ct => {
+                {completedTasksForList.map(ct => {
                   const badge = completionBadge(ct.endDate, ct.statusChangedAt)
                   return (
                     <div key={ct.id} className="border border-green-200 dark:border-green-900 rounded-lg px-3 py-2 flex items-center gap-3">
@@ -1026,8 +1122,8 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
             </div>
           )}
 
-          {/* Project allocations */}
-          {resource.allocations.length > 0 && (
+          {/* Project allocations — not tied to a specific date, hidden while date-filtered */}
+          {!isDateFiltered && resource.allocations.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-1.5">
                 <Briefcase className="h-3.5 w-3.5 text-muted-foreground" />
