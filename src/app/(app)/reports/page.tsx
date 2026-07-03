@@ -30,6 +30,9 @@ const STATUS_COLORS: Record<string, string> = {
   CANCELLED:   'bg-red-100 text-red-600',
 }
 
+// Status buckets shown in the "Specific Day" breakdown, in display order
+const DAY_STATUS_BUCKETS = ['BACKLOG', 'PLANNED', 'IN_PROGRESS', 'REVIEW', 'REWORK', 'COMPLETED'] as const
+
 function barColor(hours: number, cap: number) {
   if (cap <= 0) return 'bg-blue-400'
   const pct = hours / cap
@@ -44,6 +47,7 @@ function barColor(hours: number, cap: number) {
 interface MyTask {
   id: string; name: string; status: string; priority: string
   estimatedHours?: number; startDate?: string; endDate?: string; pctComplete?: number
+  statusChangedAt?: string
   workstream: { name: string; project: { id: string; name: string } }
 }
 
@@ -56,6 +60,42 @@ interface Project {
 
 interface PortfolioResource {
   id: string; name: string; role: string; utilizationPct: number; isOverloaded: boolean; activeTasks: number
+}
+
+function TaskRow({ t }: { t: MyTask }) {
+  return (
+    <div className="px-4 py-3 flex items-start gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-medium text-sm truncate">{t.name}</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${STATUS_COLORS[t.status] ?? 'bg-muted text-muted-foreground'}`}>
+            {t.status.replace('_', ' ')}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {t.workstream.project.name} · {t.workstream.name}
+        </p>
+        {(t.startDate || t.endDate) && (
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {t.startDate ? new Date(t.startDate.slice(0, 10) + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'}
+            {' → '}
+            {t.endDate ? new Date(t.endDate.slice(0, 10) + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'}
+          </p>
+        )}
+      </div>
+      <div className="text-right shrink-0">
+        {t.estimatedHours != null && (
+          <p className="text-sm font-semibold">{t.estimatedHours}h</p>
+        )}
+        {t.pctComplete != null && (
+          <div className="flex items-center gap-1 mt-1">
+            <Progress value={t.pctComplete} className="w-16 h-1.5" />
+            <span className="text-[10px] text-muted-foreground">{t.pctComplete}%</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ── Personal utilization report (RESOURCE users) ─────────────────────────────
@@ -160,6 +200,31 @@ function MyUtilizationReport({ userId }: { userId: string }) {
     })
   }, [tasks, dateRange])
 
+  // Status-bucketed breakdown for the "Specific Day" view — tasks active on that exact date,
+  // grouped by current status. COMPLETED matches by actual completion day (statusChangedAt),
+  // not the originally planned end date, so it reflects what was actually finished that day.
+  const dayBuckets = useMemo(() => {
+    if (period !== 'day') return null
+    const buckets: Record<string, MyTask[]> = Object.fromEntries(DAY_STATUS_BUCKETS.map(s => [s, []]))
+    for (const t of tasks) {
+      if (!(t.status in buckets)) continue
+      if (t.status === 'COMPLETED') {
+        if (t.statusChangedAt?.slice(0, 10) === specificDay) buckets.COMPLETED.push(t)
+        continue
+      }
+      const ts = t.startDate?.slice(0, 10)
+      const te = t.endDate?.slice(0, 10)
+      if (!ts || !te) continue
+      const overdue = (t.status === 'IN_PROGRESS' || t.status === 'REWORK') && te < specificDay
+      if (overdue || (ts <= specificDay && specificDay <= te)) buckets[t.status].push(t)
+    }
+    return buckets
+  }, [tasks, period, specificDay])
+
+  const dayTaskCount = dayBuckets
+    ? Object.values(dayBuckets).reduce((s, arr) => s + arr.length, 0)
+    : 0
+
   const PERIOD_LABELS: Record<Period, string> = {
     '3m': 'Last 3 Months', '6m': 'Last 6 Months', 'week': 'This Week', 'day': 'Specific Day',
   }
@@ -222,7 +287,7 @@ function MyUtilizationReport({ userId }: { userId: string }) {
 
             <Card><CardContent className="p-4">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><CalendarDays className="h-3 w-3" /> Tasks</p>
-              <p className="text-3xl font-bold mt-1">{tasksInPeriod.length}</p>
+              <p className="text-3xl font-bold mt-1">{dayBuckets ? dayTaskCount : tasksInPeriod.length}</p>
               <p className="text-xs text-muted-foreground mt-1">in this period</p>
             </CardContent></Card>
 
@@ -293,57 +358,54 @@ function MyUtilizationReport({ userId }: { userId: string }) {
             </CardContent>
           </Card>
 
-          {/* Task list for period */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Target className="h-4 w-4 text-green-500" />
-                My Tasks — {PERIOD_LABELS[period]}
-                <Badge variant="secondary" className="ml-1">{tasksInPeriod.length}</Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              {tasksInPeriod.length === 0 ? (
-                <p className="text-sm text-muted-foreground p-4 text-center">No tasks in this period</p>
-              ) : (
-                <div className="divide-y">
-                  {tasksInPeriod.map(t => (
-                    <div key={t.id} className="px-4 py-3 flex items-start gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-sm truncate">{t.name}</span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${STATUS_COLORS[t.status] ?? 'bg-muted text-muted-foreground'}`}>
-                            {t.status.replace('_', ' ')}
-                          </span>
+          {/* Task list for period — status-bucketed breakdown for a specific day, flat list otherwise */}
+          {period === 'day' && dayBuckets ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {DAY_STATUS_BUCKETS.map(status => {
+                const bucketTasks = dayBuckets[status]
+                return (
+                  <Card key={status}>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${STATUS_COLORS[status]}`}>
+                          {status.replace('_', ' ')}
+                        </span>
+                        <Badge variant="secondary" className="ml-auto">{bucketTasks.length}</Badge>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      {bucketTasks.length === 0 ? (
+                        <p className="text-xs text-muted-foreground p-4 text-center">None</p>
+                      ) : (
+                        <div className="divide-y max-h-72 overflow-y-auto">
+                          {bucketTasks.map(t => <TaskRow key={t.id} t={t} />)}
                         </div>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {t.workstream.project.name} · {t.workstream.name}
-                        </p>
-                        {(t.startDate || t.endDate) && (
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {t.startDate ? new Date(t.startDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'}
-                            {' → '}
-                            {t.endDate ? new Date(t.endDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '?'}
-                          </p>
-                        )}
-                      </div>
-                      <div className="text-right shrink-0">
-                        {t.estimatedHours != null && (
-                          <p className="text-sm font-semibold">{t.estimatedHours}h</p>
-                        )}
-                        {t.pctComplete != null && (
-                          <div className="flex items-center gap-1 mt-1">
-                            <Progress value={t.pctComplete} className="w-16 h-1.5" />
-                            <span className="text-[10px] text-muted-foreground">{t.pctComplete}%</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                      )}
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          ) : (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Target className="h-4 w-4 text-green-500" />
+                  My Tasks — {PERIOD_LABELS[period]}
+                  <Badge variant="secondary" className="ml-1">{tasksInPeriod.length}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {tasksInPeriod.length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-4 text-center">No tasks in this period</p>
+                ) : (
+                  <div className="divide-y">
+                    {tasksInPeriod.map(t => <TaskRow key={t.id} t={t} />)}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </div>
