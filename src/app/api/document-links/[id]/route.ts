@@ -4,10 +4,8 @@ import { requireAuth } from '@/lib/auth'
 
 type Ctx = { params: Promise<{ id: string }> }
 
-function canEdit(session: { id: string; role: string }, createdById: string) {
-  return createdById === session.id || ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role)
-}
-
+// Personal to each user — even ADMIN/MANAGER/PLANNER cannot view, edit, or delete another
+// person's entries. A non-owner gets 404 (not 403) so existence of others' entries isn't leaked.
 export async function PATCH(req: NextRequest, ctx: Ctx) {
   try {
     const session = await requireAuth()
@@ -15,9 +13,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     const data = await req.json()
 
     const existing = await prisma.documentLink.findUnique({ where: { id } })
-    if (!existing) return Response.json({ error: 'Not found' }, { status: 404 })
-    if (!canEdit(session, existing.createdById)) {
-      return Response.json({ error: 'Forbidden' }, { status: 403 })
+    if (!existing || existing.createdById !== session.id) {
+      return Response.json({ error: 'Not found' }, { status: 404 })
     }
 
     const title = typeof data.title === 'string' ? data.title.trim() : undefined
@@ -51,9 +48,8 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
     const { id } = await ctx.params
 
     const existing = await prisma.documentLink.findUnique({ where: { id } })
-    if (!existing) return Response.json({ error: 'Not found' }, { status: 404 })
-    if (!canEdit(session, existing.createdById)) {
-      return Response.json({ error: 'Forbidden' }, { status: 403 })
+    if (!existing || existing.createdById !== session.id) {
+      return Response.json({ error: 'Not found' }, { status: 404 })
     }
 
     await prisma.documentLink.delete({ where: { id } })

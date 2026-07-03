@@ -4,8 +4,10 @@ import { requireAuth } from '@/lib/auth'
 
 export async function GET() {
   try {
-    await requireAuth()
+    const session = await requireAuth()
+    // Personal to each user — never shown to teammates
     const documentLinks = await prisma.documentLink.findMany({
+      where: { createdById: session.id },
       include: {
         createdBy: { select: { id: true, name: true } },
       },

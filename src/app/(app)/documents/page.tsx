@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { toast } from 'sonner'
-import { useAuthStore } from '@/store/auth'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,19 +18,11 @@ interface DocumentLinkItem {
   createdAt: string
 }
 
-const MANAGE_ROLES = ['ADMIN', 'MANAGER', 'PLANNER']
-
-function canEdit(userId: string | undefined, userRole: string | undefined, createdById: string) {
-  if (!userId) return false
-  return createdById === userId || (userRole ? MANAGE_ROLES.includes(userRole) : false)
-}
-
 function emptyForm() {
   return { title: '', links: [''] }
 }
 
 export default function DocumentsPage() {
-  const { user } = useAuthStore()
   const [items, setItems] = useState<DocumentLinkItem[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -157,7 +148,7 @@ export default function DocumentsPage() {
         <div>
           <h1 className="text-2xl font-bold">Documents</h1>
           <p className="text-muted-foreground text-sm">
-            Shared reference links — Drive folders, docs, and other resources
+            Your personal reference links — visible only to you
           </p>
         </div>
         <Button onClick={openAdd} size="sm" className="bg-blue-600 hover:bg-blue-700">
@@ -190,55 +181,49 @@ export default function DocumentsPage() {
             </h2>
             <p className="text-muted-foreground text-sm max-w-sm">
               {items.length === 0
-                ? 'Add a titled link to a shared drive, doc, or resource so the whole team can find it here.'
+                ? 'Add a titled link to a drive, doc, or resource — just for you, no one else will see it.'
                 : 'Try a different search term.'}
             </p>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-3">
-          {filtered.map((item) => {
-            const editable = canEdit(user?.id, user?.role, item.createdById)
-            return (
-              <Card key={item.id}>
-                <CardContent className="p-4 flex items-start gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-sm">{item.title}</p>
-                    <div className="mt-1.5 space-y-1">
-                      {item.links.map((link, i) => (
-                        <a
-                          key={i}
-                          href={link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline break-all"
-                        >
-                          <LinkIcon className="h-3 w-3 shrink-0" />
-                          {link}
-                        </a>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1.5">Added by {item.createdBy.name}</p>
-                  </div>
-                  {editable && (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Button size="icon-sm" variant="ghost" onClick={() => openEdit(item)}>
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        className="text-destructive"
-                        onClick={() => setDeleteTarget(item)}
+          {filtered.map((item) => (
+            <Card key={item.id}>
+              <CardContent className="p-4 flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm">{item.title}</p>
+                  <div className="mt-1.5 space-y-1">
+                    {item.links.map((link, i) => (
+                      <a
+                        key={i}
+                        href={link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline break-all"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )
-          })}
+                        <LinkIcon className="h-3 w-3 shrink-0" />
+                        {link}
+                      </a>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button size="icon-sm" variant="ghost" onClick={() => openEdit(item)}>
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    className="text-destructive"
+                    onClick={() => setDeleteTarget(item)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
 
