@@ -7,9 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Eye, EyeOff, KeyRound, CheckCircle2, Bell, BellOff } from 'lucide-react'
+import { Eye, EyeOff, KeyRound, CheckCircle2, Bell, BellOff, LifeBuoy, ExternalLink, ClipboardList } from 'lucide-react'
 
 const NOTIF_PREF_KEY = 'pmo-notif-enabled'
+const TICKET_FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSckMABzfJh04w1zj-IPsMOQxUV5Vtv7__n7bytikaXGMK-N_A/viewform'
+const TICKET_STATUS_URL = 'https://docs.google.com/spreadsheets/d/1pSdc4SaOho7iiFgn5NCwiZ4-t1MGo_IWEKiX5aJmeAo/edit?gid=2070436635#gid=2070436635'
 
 export default function SettingsPage() {
   const { user, setUser } = useAuthStore()
@@ -237,6 +239,52 @@ export default function SettingsPage() {
               </p>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <LifeBuoy className="h-4 w-4 text-blue-500" /> Support & Tickets
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium">Raise a ticket</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Report an issue or submit a request using the ticket form.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              nativeButton={false}
+              render={<a href={TICKET_FORM_URL} target="_blank" rel="noopener noreferrer" />}
+            >
+              Open form <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-muted-foreground" /> Track ticket status
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Check the status of tickets you&apos;ve raised.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0"
+              nativeButton={false}
+              render={<a href={TICKET_STATUS_URL} target="_blank" rel="noopener noreferrer" />}
+            >
+              View status <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
