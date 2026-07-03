@@ -49,7 +49,7 @@ const navItems: NavItem[] = [
   { label: 'Resources',     href: '/resources',     icon: Users,         roles: ['ADMIN', 'MANAGER', 'PLANNER', 'PROJECT_LEAD', 'WORKSTREAM_LEAD', 'LEADERSHIP'] },
   { label: 'Approvals',     href: '/approvals',     icon: CheckSquare,   roles: ['ADMIN', 'MANAGER', 'PLANNER'] },
   { label: 'Reports',       href: '/reports',       icon: BarChart3 },
-  { label: 'Documents',     href: '/documents',     icon: FileText,      roles: ['ADMIN', 'MANAGER', 'PLANNER', 'PROJECT_LEAD', 'WORKSTREAM_LEAD', 'LEADERSHIP'] },
+  { label: 'Documents',     href: '/documents',     icon: FileText },
   { label: 'Notifications', href: '/notifications', icon: Bell },
   { label: 'Settings',      href: '/settings',      icon: Settings },
   { label: 'Users',         href: '/users',         icon: UserCog,       roles: ['ADMIN'] },

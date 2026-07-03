@@ -155,6 +155,7 @@ model User {
   strategicTasksAssigned     StrategicTask[]    @relation("StrategicTaskAssignee")
   leaves                     Leave[]
   meetings                   Meeting[]
+  documentLinks              DocumentLink[]     @relation("DocumentLinkCreator")
 
   @@map("users")
 }
@@ -427,6 +428,21 @@ model Document {
   task       Task?       @relation(fields: [taskId], references: [id])
 
   @@map("documents")
+}
+
+// A titled list of reference links (e.g. shared drive folders, external docs) shown
+// on the Documents page — distinct from Document, which is for per-project file uploads.
+model DocumentLink {
+  id          String   @id @default(cuid())
+  title       String
+  links       String[]
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User @relation("DocumentLinkCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@map("document_links")
 }
 
 model Product {
