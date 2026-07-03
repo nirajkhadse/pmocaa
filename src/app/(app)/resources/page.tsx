@@ -692,7 +692,7 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-4xl sm:max-w-6xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
             <Avatar className="h-9 w-9">
@@ -707,19 +707,6 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
                 {resource.department && ` · ${resource.department}`}
               </p>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <Input
-                type="date"
-                value={dateFilter}
-                onChange={e => setDateFilter(e.target.value)}
-                className="h-7 w-[150px] text-xs"
-              />
-              {dateFilter && (
-                <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => setDateFilter('')}>
-                  Clear
-                </Button>
-              )}
-            </div>
             <Button
               size="sm"
               variant="outline"
@@ -730,6 +717,23 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
               Log Meeting
             </Button>
           </DialogTitle>
+          <div className="flex items-center gap-2 pt-1">
+            <label htmlFor="resource-date-filter" className="text-xs font-medium text-muted-foreground">
+              Filter by date:
+            </label>
+            <Input
+              id="resource-date-filter"
+              type="date"
+              value={dateFilter}
+              onChange={e => setDateFilter(e.target.value)}
+              className="h-8 w-[170px] text-xs"
+            />
+            {dateFilter && (
+              <Button variant="ghost" size="sm" className="h-8 text-xs px-2" onClick={() => setDateFilter('')}>
+                Clear
+              </Button>
+            )}
+          </div>
         </DialogHeader>
 
         {/* Utilization summary */}
