@@ -63,20 +63,27 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/tasks/[id]
     }
 
     // Determine project/workstream-level permissions (one DB call covers all lead checks)
-    let isProjectLead = false
+    // Reassigning task owners is normal project-lead housekeeping during planning, gated on plan
+    // status like the rest of the app (see workstream-panel.tsx's canAssignTasks). Editing the
+    // schedule is the separate, explicitly-granted capability from "Grant Edit Access" — these two
+    // must stay independent, or granting/revoking one silently breaks the other.
+    let isProjectLeadInDraft = false
+    let isProjectLeadWithAccess = false
     let isWorkstreamLead = false
     if (['PROJECT_LEAD', 'WORKSTREAM_LEAD'].includes(session.role)) {
       const ws = await prisma.workstream.findUnique({
         where: { id: existing.workstreamId },
-        select: { leadId: true, project: { select: { leadId: true, editAccessGranted: true } } },
+        select: { leadId: true, project: { select: { leadId: true, editAccessGranted: true, planStatus: true } } },
       })
-      // Project lead only gets these powers once edit access has been explicitly granted —
-      // otherwise the grant/revoke toggle has no actual effect on what they can do.
-      if (session.role === 'PROJECT_LEAD') isProjectLead = ws?.project.leadId === session.id && !!ws?.project.editAccessGranted
+      if (session.role === 'PROJECT_LEAD') {
+        const isLead = ws?.project.leadId === session.id
+        isProjectLeadInDraft = isLead && ws?.project.planStatus !== 'APPROVED'
+        isProjectLeadWithAccess = isLead && !!ws?.project.editAccessGranted
+      }
       if (session.role === 'WORKSTREAM_LEAD') isWorkstreamLead = ws?.leadId === session.id
     }
-    const canAssign = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) || isProjectLead || isWorkstreamLead
-    const canEditDates = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) || isProjectLead || isWorkstreamLead
+    const canAssign = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) || isProjectLeadInDraft || isWorkstreamLead
+    const canEditDates = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) || isProjectLeadWithAccess || isWorkstreamLead
     // Actual dates: the task owner recording their own real progress, or anyone who can edit
     // the original schedule. Previously open to any authenticated user — tightened here.
     const canEditActualDates = canEditDates || existing.ownerId === session.id

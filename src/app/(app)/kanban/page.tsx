@@ -49,7 +49,7 @@ interface FullTask {
   owner?: { id: string; name: string; avatarUrl?: string; email?: string; role?: string }
   assignedBy?: { id: string; name: string; avatarUrl?: string; role?: string }
   approvedBy?: { id: string; name: string; avatarUrl?: string; role?: string }
-  workstream: { id: string; name: string; project: { id: string; name: string; leadId?: string | null; editAccessGranted?: boolean } }
+  workstream: { id: string; name: string; project: { id: string; name: string; leadId?: string | null } }
   history: HistoryEntry[]
 }
 
@@ -157,11 +157,11 @@ export default function KanbanPage() {
   // Strategic task detail (simple read-only view)
   const [strategicDetailTask, setStrategicDetailTask] = useState<Task | null>(null)
 
+  // Reassignment is normal project-lead housekeeping, independent of the "Grant Edit Access"
+  // timeline feature — matches canAssign in api/tasks/[id]/route.ts.
   const canEditAssignee = !!(user && (
     ['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role) ||
-    (user.role === 'PROJECT_LEAD' &&
-      detailFull?.workstream?.project?.leadId === user.id &&
-      detailFull?.workstream?.project?.editAccessGranted)
+    (user.role === 'PROJECT_LEAD' && detailFull?.workstream?.project?.leadId === user.id)
   ))
 
   // Use a ref for load so the interval doesn't capture stale closures

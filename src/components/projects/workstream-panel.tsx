@@ -124,11 +124,16 @@ export function WorkstreamPanel({ project, onRefresh, productId, onlyDeliverable
     }
   }, [ownerHistory])
 
+  const isProjectLead = user?.role === 'PROJECT_LEAD' && user.id === project.leadId
   const canEdit =
     (user && canManageProjects(user.role)) ||
-    (user?.role === 'PROJECT_LEAD' && user.id === project.leadId && project.planStatus !== 'APPROVED')
-  const canEditDates = user && ['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role)
-  const isProjectLead = user?.role === 'PROJECT_LEAD' && user.id === project.leadId
+    (isProjectLead && project.planStatus !== 'APPROVED')
+  // Timeline editing is the explicitly-granted capability from "Grant Edit Access" — independent
+  // of plan status, unlike canEdit/canAssignTasks below.
+  const canEditDates = !!(user && (
+    ['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role) ||
+    (isProjectLead && project.editAccessGranted)
+  ))
   const canAssignTasks = canEdit || (isProjectLead && project.planStatus !== 'APPROVED')
 
   function getEdit<K extends keyof Task>(task: Task, key: K): Task[K] {
@@ -418,6 +423,7 @@ export function WorkstreamPanel({ project, onRefresh, productId, onlyDeliverable
                                       type="date"
                                       value={(getEdit(task, 'actualStartDate') as string)?.slice(0, 10) ?? ''}
                                       onChange={(e) => setEdit(task.id, 'actualStartDate', e.target.value)}
+                                      disabled={!(canEditDates || task.owner?.id === user?.id)}
                                       className="h-7 text-xs px-2"
                                     />
                                   </div>
@@ -427,6 +433,7 @@ export function WorkstreamPanel({ project, onRefresh, productId, onlyDeliverable
                                       type="date"
                                       value={(getEdit(task, 'actualEndDate') as string)?.slice(0, 10) ?? ''}
                                       onChange={(e) => setEdit(task.id, 'actualEndDate', e.target.value)}
+                                      disabled={!(canEditDates || task.owner?.id === user?.id)}
                                       className="h-7 text-xs px-2"
                                     />
                                   </div>
