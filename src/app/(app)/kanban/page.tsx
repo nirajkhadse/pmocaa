@@ -240,8 +240,9 @@ export default function KanbanPage() {
   const pointerXRef = useRef<number | null>(null)
   const pointerYRef = useRef<number | null>(null)
   const autoScrollRafRef = useRef<number | null>(null)
-  const AUTO_SCROLL_EDGE = 100
-  const AUTO_SCROLL_MAX_SPEED = 18
+  const AUTO_SCROLL_EDGE = 140
+  const AUTO_SCROLL_MIN_SPEED = 14
+  const AUTO_SCROLL_MAX_SPEED = 55
 
   const handleDragPointerMove = useCallback((e: MouseEvent) => {
     pointerXRef.current = e.clientX
@@ -257,10 +258,14 @@ export default function KanbanPage() {
       if (y >= rect.top && y <= rect.bottom) {
         const distFromLeft = x - rect.left
         const distFromRight = rect.right - x
+        // Speed ramps from MIN (at the outer edge of the zone) to MAX (right at the border) —
+        // a floor speed keeps it feeling responsive as soon as you cross into the zone.
         if (distFromLeft >= 0 && distFromLeft < AUTO_SCROLL_EDGE) {
-          container.scrollLeft -= AUTO_SCROLL_MAX_SPEED * (1 - distFromLeft / AUTO_SCROLL_EDGE)
+          const ratio = 1 - distFromLeft / AUTO_SCROLL_EDGE
+          container.scrollLeft -= AUTO_SCROLL_MIN_SPEED + (AUTO_SCROLL_MAX_SPEED - AUTO_SCROLL_MIN_SPEED) * ratio
         } else if (distFromRight >= 0 && distFromRight < AUTO_SCROLL_EDGE) {
-          container.scrollLeft += AUTO_SCROLL_MAX_SPEED * (1 - distFromRight / AUTO_SCROLL_EDGE)
+          const ratio = 1 - distFromRight / AUTO_SCROLL_EDGE
+          container.scrollLeft += AUTO_SCROLL_MIN_SPEED + (AUTO_SCROLL_MAX_SPEED - AUTO_SCROLL_MIN_SPEED) * ratio
         }
       }
     }
