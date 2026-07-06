@@ -234,7 +234,58 @@ export default function KanbanPage() {
     await load()
   }
 
+  // Horizontal auto-scroll while dragging a card near the board's left/right edge —
+  // only 4 of 6 columns fit on screen at once, so this reveals Rework/Completed while dragging.
+  const boardScrollRef = useRef<HTMLDivElement>(null)
+  const pointerXRef = useRef<number | null>(null)
+  const pointerYRef = useRef<number | null>(null)
+  const autoScrollRafRef = useRef<number | null>(null)
+  const AUTO_SCROLL_EDGE = 100
+  const AUTO_SCROLL_MAX_SPEED = 18
+
+  const handleDragPointerMove = useCallback((e: MouseEvent) => {
+    pointerXRef.current = e.clientX
+    pointerYRef.current = e.clientY
+  }, [])
+
+  const runAutoScroll = useCallback(() => {
+    const container = boardScrollRef.current
+    const x = pointerXRef.current
+    const y = pointerYRef.current
+    if (container && x !== null && y !== null) {
+      const rect = container.getBoundingClientRect()
+      if (y >= rect.top && y <= rect.bottom) {
+        const distFromLeft = x - rect.left
+        const distFromRight = rect.right - x
+        if (distFromLeft >= 0 && distFromLeft < AUTO_SCROLL_EDGE) {
+          container.scrollLeft -= AUTO_SCROLL_MAX_SPEED * (1 - distFromLeft / AUTO_SCROLL_EDGE)
+        } else if (distFromRight >= 0 && distFromRight < AUTO_SCROLL_EDGE) {
+          container.scrollLeft += AUTO_SCROLL_MAX_SPEED * (1 - distFromRight / AUTO_SCROLL_EDGE)
+        }
+      }
+    }
+    autoScrollRafRef.current = requestAnimationFrame(runAutoScroll)
+  }, [])
+
+  const stopAutoScroll = useCallback(() => {
+    window.removeEventListener('mousemove', handleDragPointerMove)
+    if (autoScrollRafRef.current !== null) {
+      cancelAnimationFrame(autoScrollRafRef.current)
+      autoScrollRafRef.current = null
+    }
+    pointerXRef.current = null
+    pointerYRef.current = null
+  }, [handleDragPointerMove])
+
+  const onDragStart = useCallback(() => {
+    window.addEventListener('mousemove', handleDragPointerMove)
+    autoScrollRafRef.current = requestAnimationFrame(runAutoScroll)
+  }, [handleDragPointerMove, runAutoScroll])
+
+  useEffect(() => stopAutoScroll, [stopAutoScroll])
+
   async function onDragEnd(result: DropResult) {
+    stopAutoScroll()
     if (!result.destination) return
     const { draggableId, destination } = result
     const newStatus = destination.droppableId
@@ -413,8 +464,8 @@ export default function KanbanPage() {
           ))}
         </div>
       ) : (
-        <DragDropContext onDragEnd={onDragEnd}>
-          <div className="flex gap-4 overflow-x-auto pb-4 flex-1 min-h-0">
+        <DragDropContext onDragStart={onDragStart} onDragEnd={onDragEnd}>
+          <div ref={boardScrollRef} className="flex gap-4 overflow-x-auto pb-4 flex-1 min-h-0">
             {COLUMNS.map((col) => {
               const colTasks = getColumnTasks(col.id)
               return (
