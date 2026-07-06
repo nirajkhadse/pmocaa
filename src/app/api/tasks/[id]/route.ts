@@ -68,13 +68,18 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/tasks/[id]
     if (['PROJECT_LEAD', 'WORKSTREAM_LEAD'].includes(session.role)) {
       const ws = await prisma.workstream.findUnique({
         where: { id: existing.workstreamId },
-        select: { leadId: true, project: { select: { leadId: true } } },
+        select: { leadId: true, project: { select: { leadId: true, editAccessGranted: true } } },
       })
-      if (session.role === 'PROJECT_LEAD') isProjectLead = ws?.project.leadId === session.id
+      // Project lead only gets these powers once edit access has been explicitly granted —
+      // otherwise the grant/revoke toggle has no actual effect on what they can do.
+      if (session.role === 'PROJECT_LEAD') isProjectLead = ws?.project.leadId === session.id && !!ws?.project.editAccessGranted
       if (session.role === 'WORKSTREAM_LEAD') isWorkstreamLead = ws?.leadId === session.id
     }
     const canAssign = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) || isProjectLead || isWorkstreamLead
     const canEditDates = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) || isProjectLead || isWorkstreamLead
+    // Actual dates: the task owner recording their own real progress, or anyone who can edit
+    // the original schedule. Previously open to any authenticated user — tightened here.
+    const canEditActualDates = canEditDates || existing.ownerId === session.id
 
     // Only count ownerId as "changed" if the caller is actually allowed to reassign
     const ownerChanged = canAssign && data.ownerId !== undefined && data.ownerId !== existing.ownerId
@@ -118,18 +123,18 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/tasks/[id]
         ...(statusChanged && { statusChangedAt: new Date() }),
         ...(statusChanged && data.status === 'REWORK' && { reworkCount: { increment: 1 } }),
         ...(data.priority !== undefined && { priority: data.priority }),
-        // Scheduled dates restricted to ADMIN/MANAGER/PLANNER
+        // Scheduled (original) dates: ADMIN/MANAGER/PLANNER, workstream lead, or project lead with granted access
         ...(data.startDate !== undefined && canEditDates && {
           startDate: data.startDate ? new Date(data.startDate) : null,
         }),
         ...(data.endDate !== undefined && canEditDates && {
           endDate: data.endDate ? new Date(data.endDate) : null,
         }),
-        // Actual dates editable by anyone
-        ...(data.actualStartDate !== undefined && {
+        // Actual dates: task owner, or anyone who can edit the original schedule
+        ...(data.actualStartDate !== undefined && canEditActualDates && {
           actualStartDate: data.actualStartDate ? new Date(data.actualStartDate) : null,
         }),
-        ...(data.actualEndDate !== undefined && {
+        ...(data.actualEndDate !== undefined && canEditActualDates && {
           actualEndDate: data.actualEndDate ? new Date(data.actualEndDate) : null,
         }),
         ...(data.pctComplete !== undefined && { pctComplete: Math.min(100, Math.max(0, Number(data.pctComplete))) }),

@@ -49,7 +49,7 @@ interface FullTask {
   owner?: { id: string; name: string; avatarUrl?: string; email?: string; role?: string }
   assignedBy?: { id: string; name: string; avatarUrl?: string; role?: string }
   approvedBy?: { id: string; name: string; avatarUrl?: string; role?: string }
-  workstream: { id: string; name: string; project: { id: string; name: string; leadId?: string | null } }
+  workstream: { id: string; name: string; project: { id: string; name: string; leadId?: string | null; editAccessGranted?: boolean } }
   history: HistoryEntry[]
 }
 
@@ -159,7 +159,9 @@ export default function KanbanPage() {
 
   const canEditAssignee = !!(user && (
     ['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role) ||
-    (user.role === 'PROJECT_LEAD' && detailFull?.workstream?.project?.leadId === user.id)
+    (user.role === 'PROJECT_LEAD' &&
+      detailFull?.workstream?.project?.leadId === user.id &&
+      detailFull?.workstream?.project?.editAccessGranted)
   ))
 
   // Use a ref for load so the interval doesn't capture stale closures

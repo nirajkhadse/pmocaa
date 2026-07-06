@@ -209,7 +209,7 @@ export default function ProjectDetailPage() {
   const userIsManager = user?.role === 'MANAGER'
   const userCanAllocate = user && canAllocateResources(user.role)
   const isProjectLead = user?.id === project.leadId
-  const canEditProject = userIsPlanner || userIsManager || (isProjectLead && project.planStatus === 'DRAFT')
+  const canEditProject = userIsPlanner || userIsManager || (isProjectLead && (project.planStatus === 'DRAFT' || project.editAccessGranted))
 
   // Overdue tasks
   const now = new Date()
@@ -566,16 +566,22 @@ export default function ProjectDetailPage() {
                   <DropdownMenuItem onClick={repairTimeline}>
                     <CalendarRange className="mr-2 h-4 w-4 text-orange-600" /> Repair Timeline
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={openEditTimeline}>
-                    <CalendarRange className="mr-2 h-4 w-4" /> Edit Timeline
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={toggleEditAccess}>
-                    {project.editAccessGranted
-                      ? <><ShieldOff className="mr-2 h-4 w-4 text-orange-500" /> Revoke Edit Access</>
-                      : <><ShieldCheck className="mr-2 h-4 w-4 text-green-600" /> Grant Edit Access</>
-                    }
-                  </DropdownMenuItem>
                 </>
+              )}
+              {/* Edit Timeline: planners always; project lead once edit access is granted */}
+              {(userIsPlanner || (isProjectLead && project.editAccessGranted)) && (
+                <DropdownMenuItem onClick={openEditTimeline}>
+                  <CalendarRange className="mr-2 h-4 w-4" /> Edit Timeline
+                </DropdownMenuItem>
+              )}
+              {/* Only planners/admins/managers grant or revoke access — a lead can't self-grant */}
+              {userIsPlanner && (
+                <DropdownMenuItem onClick={toggleEditAccess}>
+                  {project.editAccessGranted
+                    ? <><ShieldOff className="mr-2 h-4 w-4 text-orange-500" /> Revoke Edit Access</>
+                    : <><ShieldCheck className="mr-2 h-4 w-4 text-green-600" /> Grant Edit Access</>
+                  }
+                </DropdownMenuItem>
               )}
               {(userIsPlanner || userIsManager) && (
                 <>
@@ -961,7 +967,7 @@ export default function ProjectDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Edit Timeline Dialog (PLANNER only) ── */}
+      {/* ── Edit Timeline Dialog (planner, or project lead with granted edit access) ── */}
       <Dialog open={editTimelineOpen} onOpenChange={setEditTimelineOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>

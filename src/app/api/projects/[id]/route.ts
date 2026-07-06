@@ -52,12 +52,13 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/projects/[
     if (!existing) return Response.json({ error: 'Not found' }, { status: 404 })
 
     const isFullAccess = ['ADMIN', 'PLANNER', 'MANAGER'].includes(session.role)
-    const isLeadWithAccess =
-      session.role === 'PROJECT_LEAD' &&
-      existing.leadId === session.id &&
-      existing.planStatus === 'DRAFT'
+    const isProjectLead = session.role === 'PROJECT_LEAD' && existing.leadId === session.id
+    // DRAFT-only lead access: lets the lead edit basic meta fields while still setting up the plan
+    const isLeadWithAccess = isProjectLead && existing.planStatus === 'DRAFT'
+    // Explicit grant: lets the lead edit the timeline regardless of plan status, until revoked
+    const isLeadWithGrantedAccess = isProjectLead && existing.editAccessGranted
 
-    if (!isFullAccess && !isLeadWithAccess) {
+    if (!isFullAccess && !isLeadWithAccess && !isLeadWithGrantedAccess) {
       return Response.json({ error: 'Forbidden' }, { status: 403 })
     }
 
@@ -78,10 +79,15 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/projects/[
       if (data.productType !== undefined) updateData.productType = data.productType
     }
 
-    // Timeline + privileged fields: PLANNER/ADMIN/MANAGER only
-    if (isFullAccess) {
+    // Timeline: planner/admin/manager, or the project lead once edit access has been granted
+    if (isFullAccess || isLeadWithGrantedAccess) {
       if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate)
       if (data.endDate !== undefined) updateData.endDate = new Date(data.endDate)
+    }
+
+    // Privileged fields: PLANNER/ADMIN/MANAGER only — a lead can never grant/revoke their own
+    // access or change plan status, even with edit access granted
+    if (isFullAccess) {
       if (data.plannerId !== undefined) updateData.plannerId = data.plannerId
       if (data.editAccessGranted !== undefined) updateData.editAccessGranted = data.editAccessGranted
       if (data.planStatus !== undefined) updateData.planStatus = data.planStatus

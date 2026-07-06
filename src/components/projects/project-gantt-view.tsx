@@ -41,6 +41,8 @@ interface Project {
   id: string
   startDate: string
   endDate: string
+  leadId?: string | null
+  editAccessGranted?: boolean
   workstreams: Workstream[]
 }
 
@@ -91,7 +93,10 @@ export function ProjectGanttView({
   onRefresh: () => void
 }) {
   const { user } = useAuthStore()
-  const canEditDates = user && ['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role)
+  const canEditDates = !!(user && (
+    ['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role) ||
+    (user.role === 'PROJECT_LEAD' && project.leadId === user.id && project.editAccessGranted)
+  ))
 
   const [dayW, setDayW] = useState(28)
   const [viewStart, setViewStart] = useState(() => {
@@ -476,13 +481,15 @@ export function ProjectGanttView({
                         {task.owner.name.split(' ')[0]}
                       </span>
                     )}
-                    <button
-                      className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
-                      onClick={() => openEditTask(task, row.label)}
-                      title="Record actual dates"
-                    >
-                      <Pencil className="h-2.5 w-2.5" />
-                    </button>
+                    {(canEditDates || task.owner?.id === user?.id) && (
+                      <button
+                        className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                        onClick={() => openEditTask(task, row.label)}
+                        title="Record actual dates"
+                      >
+                        <Pencil className="h-2.5 w-2.5" />
+                      </button>
+                    )}
                   </div>
 
                   {/* Timeline area */}
@@ -632,7 +639,9 @@ export function ProjectGanttView({
           <span className="text-xs text-muted-foreground">Actual</span>
         </div>
         {!canEditDates && (
-          <span className="ml-auto text-xs text-muted-foreground">Only planners can edit dates</span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            Only planners, or a project lead with edit access granted, can edit dates
+          </span>
         )}
       </div>
     </div>
