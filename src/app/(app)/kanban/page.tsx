@@ -236,13 +236,17 @@ export default function KanbanPage() {
 
   // Horizontal auto-scroll while dragging a card near the board's left/right edge —
   // only 4 of 6 columns fit on screen at once, so this reveals Rework/Completed while dragging.
+  // Driven by setInterval rather than requestAnimationFrame: rAF callbacks are fully suspended
+  // by the browser whenever it considers the tab non-visible, which made the scroll silently
+  // stop firing in some environments even though pointer tracking kept working fine.
   const boardScrollRef = useRef<HTMLDivElement>(null)
   const pointerXRef = useRef<number | null>(null)
   const pointerYRef = useRef<number | null>(null)
-  const autoScrollRafRef = useRef<number | null>(null)
+  const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const AUTO_SCROLL_EDGE = 140
   const AUTO_SCROLL_MIN_SPEED = 14
   const AUTO_SCROLL_MAX_SPEED = 55
+  const AUTO_SCROLL_TICK_MS = 16
 
   const handleDragPointerMove = useCallback((e: MouseEvent) => {
     pointerXRef.current = e.clientX
@@ -253,30 +257,27 @@ export default function KanbanPage() {
     const container = boardScrollRef.current
     const x = pointerXRef.current
     const y = pointerYRef.current
-    if (container && x !== null && y !== null) {
-      const rect = container.getBoundingClientRect()
-      if (y >= rect.top && y <= rect.bottom) {
-        const distFromLeft = x - rect.left
-        const distFromRight = rect.right - x
-        // Speed ramps from MIN (at the outer edge of the zone) to MAX (right at the border) —
-        // a floor speed keeps it feeling responsive as soon as you cross into the zone.
-        if (distFromLeft >= 0 && distFromLeft < AUTO_SCROLL_EDGE) {
-          const ratio = 1 - distFromLeft / AUTO_SCROLL_EDGE
-          container.scrollLeft -= AUTO_SCROLL_MIN_SPEED + (AUTO_SCROLL_MAX_SPEED - AUTO_SCROLL_MIN_SPEED) * ratio
-        } else if (distFromRight >= 0 && distFromRight < AUTO_SCROLL_EDGE) {
-          const ratio = 1 - distFromRight / AUTO_SCROLL_EDGE
-          container.scrollLeft += AUTO_SCROLL_MIN_SPEED + (AUTO_SCROLL_MAX_SPEED - AUTO_SCROLL_MIN_SPEED) * ratio
-        }
-      }
+    if (!container || x === null || y === null) return
+    const rect = container.getBoundingClientRect()
+    if (y < rect.top || y > rect.bottom) return
+    const distFromLeft = x - rect.left
+    const distFromRight = rect.right - x
+    // Speed ramps from MIN (at the outer edge of the zone) to MAX (right at the border) —
+    // a floor speed keeps it feeling responsive as soon as you cross into the zone.
+    if (distFromLeft >= 0 && distFromLeft < AUTO_SCROLL_EDGE) {
+      const ratio = 1 - distFromLeft / AUTO_SCROLL_EDGE
+      container.scrollLeft -= AUTO_SCROLL_MIN_SPEED + (AUTO_SCROLL_MAX_SPEED - AUTO_SCROLL_MIN_SPEED) * ratio
+    } else if (distFromRight >= 0 && distFromRight < AUTO_SCROLL_EDGE) {
+      const ratio = 1 - distFromRight / AUTO_SCROLL_EDGE
+      container.scrollLeft += AUTO_SCROLL_MIN_SPEED + (AUTO_SCROLL_MAX_SPEED - AUTO_SCROLL_MIN_SPEED) * ratio
     }
-    autoScrollRafRef.current = requestAnimationFrame(runAutoScroll)
   }, [])
 
   const stopAutoScroll = useCallback(() => {
     window.removeEventListener('mousemove', handleDragPointerMove)
-    if (autoScrollRafRef.current !== null) {
-      cancelAnimationFrame(autoScrollRafRef.current)
-      autoScrollRafRef.current = null
+    if (autoScrollTimerRef.current !== null) {
+      clearInterval(autoScrollTimerRef.current)
+      autoScrollTimerRef.current = null
     }
     pointerXRef.current = null
     pointerYRef.current = null
@@ -284,7 +285,7 @@ export default function KanbanPage() {
 
   const onDragStart = useCallback(() => {
     window.addEventListener('mousemove', handleDragPointerMove)
-    autoScrollRafRef.current = requestAnimationFrame(runAutoScroll)
+    autoScrollTimerRef.current = setInterval(runAutoScroll, AUTO_SCROLL_TICK_MS)
   }, [handleDragPointerMove, runAutoScroll])
 
   useEffect(() => stopAutoScroll, [stopAutoScroll])
