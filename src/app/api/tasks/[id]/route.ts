@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireAuth } from '@/lib/auth'
 import { notifyTaskAssigned } from '@/lib/notifications'
 
-const REVIEWER_ROLES = new Set(['ADMIN', 'MANAGER', 'PLANNER'])
+const REVIEWER_ROLES = new Set(['ADMIN', 'MANAGER', 'PLANNER', 'PROJECT_LEAD', 'WORKSTREAM_LEAD'])
 
 export async function GET(_req: NextRequest, ctx: RouteContext<'/api/tasks/[id]'>) {
   try {
