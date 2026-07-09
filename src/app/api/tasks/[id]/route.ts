@@ -52,11 +52,14 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/tasks/[id]
     const statusChanged = data.status !== undefined && data.status !== existing.status
 
     // Approve/reject (REVIEW → COMPLETED or REWORK) is restricted to whoever assigned the task,
-    // or PLANNER/MANAGER/ADMIN. The task owner can never review their own work, regardless of role —
-    // UNLESS the task is self-assigned (owner === assigner), in which case no separate reviewer
-    // exists and the person may mark their own work complete directly.
+    // or roles in REVIEWER_ROLES. The task owner cannot review their own work when someone else
+    // assigned it to them — UNLESS the task is self-assigned (no external assigner exists),
+    // in which case the owner may mark their own work complete directly.
+    // Self-assigned = assignedById is null OR assignedById equals the task owner themselves.
     if (statusChanged && existing.status === 'REVIEW' && ['COMPLETED', 'REWORK'].includes(data.status)) {
-      const isSelfAssigned = existing.ownerId === session.id && existing.assignedById === session.id
+      const isSelfAssigned =
+        existing.ownerId === session.id &&
+        (!existing.assignedById || existing.assignedById === existing.ownerId)
       const canReviewTask =
         isSelfAssigned ||
         (existing.ownerId !== session.id &&

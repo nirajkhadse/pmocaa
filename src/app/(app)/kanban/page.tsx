@@ -298,31 +298,29 @@ export default function KanbanPage() {
     const task = tasks.find((t) => t.id === draggableId)
     if (!task || task.status === newStatus) return
 
-    // Guard: task owners cannot drag their own task directly to COMPLETED —
-    // they must use the "Submit for Review" button so a reviewer can approve it first.
-    // Exceptions:
-    //   1. Self-assigned tasks (owner === assigner): no separate reviewer exists, allow direct completion.
-    //   2. Reviewers dragging a REVIEW-status task to COMPLETED.
+    // Guard: prevent task owners from bypassing review when someone ELSE assigned the task to them.
+    // Exceptions allowed:
+    //   1. Self-assigned: assignedById is null or equals ownerId — the person did the work AND
+    //      requested it themselves, so no separate reviewer is needed.
+    //   2. Reviewers (PROJECT_LEAD / MANAGER etc.) dragging a REVIEW-status task to COMPLETED.
     if (!task._isStrategic && newStatus === 'COMPLETED') {
       const isOwner = task.ownerId === user?.id
-      const isSelfAssigned = isOwner && task.assignedById === user?.id
+      // Self-assigned = no external assigner, or the assigner is the owner themselves
+      const isSelfAssigned = isOwner && (!task.assignedById || task.assignedById === task.ownerId)
       const isFromReview = task.status === 'REVIEW'
       const isReviewer = !isOwner && canReview(task)
 
-      // Self-assigned: person did and assigned the work themselves — no reviewer needed
       if (!isSelfAssigned) {
         if (isOwner) {
-          // Task owners must go through the review flow
+          // Task was assigned by someone else — must go through the review flow
           toast.error('Submit this task for review first — your reviewer will mark it complete.')
           return
         }
         if (!isReviewer) {
-          // Non-reviewers cannot approve tasks
           toast.error('Only the task assigner, project lead, or a manager can mark this task complete.')
           return
         }
         if (!isFromReview) {
-          // Reviewers should only approve tasks that have been submitted for review
           toast.error('The task must be in Review status before it can be marked complete.')
           return
         }
