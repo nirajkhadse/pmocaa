@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import {
   CheckCircle2, XCircle, Clock, AlertTriangle, ChevronDown, ChevronUp,
-  ClipboardList, UserPlus,
+  ClipboardList, UserPlus, Target, Calendar,
 } from 'lucide-react'
 import { AssignWorkDialog } from '@/components/assign-work-dialog'
 
@@ -53,6 +53,17 @@ interface AssigneeTask {
   workstream: { name: string; project: { name: string } }
 }
 
+// ── Strategic Request types ─────────────────────────────────────────────────
+interface StrategicRequestApproval {
+  id: string; title: string; description?: string; status: string
+  startDate: string; endDate?: string; createdAt: string
+  fileLinks?: string[]
+  submitter: { id: string; name: string }
+  approver?: { id: string; name: string }
+  approvalNote?: string
+  tasks: Array<{ id: string; title: string; assignee?: { name: string } }>
+}
+
 const SEVERITY_COLORS: Record<string, string> = {
   LOW: 'text-green-600 bg-green-50', MEDIUM: 'text-blue-600 bg-blue-50',
   HIGH: 'text-orange-600 bg-orange-50', CRITICAL: 'text-red-600 bg-red-50',
@@ -70,7 +81,7 @@ const REQ_STATUS_COLORS: Record<string, string> = {
 
 export default function ApprovalsPage() {
   const { user } = useAuthStore()
-  const [tab, setTab] = useState<'requests' | 'schedule'>('requests')
+  const [tab, setTab] = useState<'requests' | 'strategic' | 'schedule'>('requests')
 
   // Schedule changes state
   const [changes,      setChanges]      = useState<ScheduleChange[]>([])
@@ -100,6 +111,14 @@ export default function ApprovalsPage() {
   // Inline per-request assignment fields (keyed by requestId)
   const [inlineAssign,  setInlineAssign]  = useState<Record<string, { assigneeId: string; estimatedHours: string }>>({})
   const [savingAssign,  setSavingAssign]  = useState<string | null>(null)
+
+  // Strategic requests state
+  const [srRequests,     setSrRequests]     = useState<StrategicRequestApproval[]>([])
+  const [srLoad,         setSrLoad]         = useState(false)
+  const [srActionLoad,   setSrActionLoad]   = useState<string | null>(null)
+  const [srRejectTarget, setSrRejectTarget] = useState<StrategicRequestApproval | null>(null)
+  const [srRejectNote,   setSrRejectNote]   = useState('')
+  const [srRejecting,    setSrRejecting]    = useState(false)
 
   const canApprove = user && canApproveChanges(user.role)
 
@@ -131,8 +150,20 @@ export default function ApprovalsPage() {
     finally { setWLoad(false) }
   }
 
+  const loadStrategicRequests = async () => {
+    setSrLoad(true)
+    try {
+      const res = await fetch('/api/strategic-requests')
+      if (!res.ok) return
+      const data = await res.json()
+      setSrRequests(Array.isArray(data) ? data.filter((r: StrategicRequestApproval) => r.status === 'PENDING_APPROVAL') : [])
+    } catch { toast.error('Failed to load strategic requests') }
+    finally { setSrLoad(false) }
+  }
+
   useEffect(() => { loadChanges() }, [scFilter])
   useEffect(() => { loadRequests() }, [wFilter])
+  useEffect(() => { if (tab === 'strategic') loadStrategicRequests() }, [tab])
 
   // Load team members for assignee dropdowns
   useEffect(() => {
@@ -245,9 +276,42 @@ export default function ApprovalsPage() {
     finally { setApproving(false) }
   }
 
+  // ── Strategic request actions
+  async function handleSrApprove(sr: StrategicRequestApproval) {
+    setSrActionLoad(sr.id + 'approve')
+    try {
+      const res = await fetch(`/api/strategic-requests/${sr.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'approve' }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error)
+      toast.success('Strategic request approved')
+      loadStrategicRequests()
+    } catch (e: unknown) { toast.error(e instanceof Error ? e.message : 'Failed') }
+    finally { setSrActionLoad(null) }
+  }
+
+  async function handleSrReject() {
+    if (!srRejectTarget) return
+    setSrRejecting(true)
+    try {
+      const res = await fetch(`/api/strategic-requests/${srRejectTarget.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reject', note: srRejectNote }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error)
+      toast.success('Strategic request rejected')
+      setSrRejectTarget(null)
+      setSrRejectNote('')
+      loadStrategicRequests()
+    } catch (e: unknown) { toast.error(e instanceof Error ? e.message : 'Failed') }
+    finally { setSrRejecting(false) }
+  }
+
   const pendingCount    = wRequests.filter(r => r.status === 'SUBMITTED').length
   const inReviewCount   = wRequests.filter(r => r.status === 'REVIEW').length
   const pendingScCount  = changes.filter(c => c.status === 'PENDING').length
+  const pendingSrCount  = srRequests.length
 
   return (
     <div className="p-6 space-y-5">
@@ -279,6 +343,22 @@ export default function ApprovalsPage() {
             </span>
           )}
         </button>
+        {canApprove && (
+          <button
+            onClick={() => setTab('strategic')}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              tab === 'strategic' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Target className="h-4 w-4" />
+            Strategic Requests
+            {pendingSrCount > 0 && (
+              <span className="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
+                {pendingSrCount}
+              </span>
+            )}
+          </button>
+        )}
         <button
           onClick={() => setTab('schedule')}
           className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -426,6 +506,83 @@ export default function ApprovalsPage() {
                 </Card>
                 )
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── STRATEGIC REQUESTS TAB ── */}
+      {tab === 'strategic' && (
+        <div className="space-y-4">
+          {srLoad ? (
+            <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-28 rounded-lg" />)}</div>
+          ) : srRequests.length === 0 ? (
+            <div className="flex flex-col items-center py-16 text-muted-foreground">
+              <Target className="h-10 w-10 opacity-20 mb-2" />
+              <p className="text-sm">No strategic requests pending approval</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {srRequests.map((sr) => (
+                <Card key={sr.id}>
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-semibold text-sm">{sr.title}</h3>
+                          <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-yellow-100 text-yellow-700">
+                            Pending Approval
+                          </span>
+                          {sr.tasks.length > 0 && (
+                            <Badge variant="outline" className="text-xs">
+                              {sr.tasks.length} task{sr.tasks.length !== 1 ? 's' : ''}
+                            </Badge>
+                          )}
+                        </div>
+                        {sr.description && (
+                          <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{sr.description}</p>
+                        )}
+                        <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
+                          <span>By {sr.submitter.name}</span>
+                          <span className="flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            {format(new Date(sr.startDate), 'MMM d, yyyy')}
+                            {sr.endDate && <> → {format(new Date(sr.endDate), 'MMM d, yyyy')}</>}
+                          </span>
+                          <span>{format(new Date(sr.createdAt), 'MMM d, yyyy')}</span>
+                        </div>
+                        {sr.tasks.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {sr.tasks.slice(0, 4).map(t => (
+                              <span key={t.id} className="text-xs bg-muted px-2 py-0.5 rounded-full">
+                                {t.title}{t.assignee ? ` → ${t.assignee.name}` : ''}
+                              </span>
+                            ))}
+                            {sr.tasks.length > 4 && (
+                              <span className="text-xs text-muted-foreground">+{sr.tasks.length - 4} more</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
+                        <Button size="sm" variant="outline"
+                          className="h-7 text-xs text-green-600 border-green-200 hover:bg-green-50"
+                          disabled={srActionLoad === sr.id + 'approve'}
+                          onClick={() => handleSrApprove(sr)}>
+                          <CheckCircle2 className="mr-1 h-3 w-3" />
+                          {srActionLoad === sr.id + 'approve' ? 'Approving…' : 'Approve'}
+                        </Button>
+                        <Button size="sm" variant="outline"
+                          className="h-7 text-xs text-red-600 border-red-200 hover:bg-red-50"
+                          onClick={() => { setSrRejectTarget(sr); setSrRejectNote('') }}>
+                          <XCircle className="mr-1 h-3 w-3" /> Reject
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           )}
         </div>
@@ -753,6 +910,45 @@ export default function ApprovalsPage() {
         open={assignDialogOpen}
         onOpenChange={setAssignDialogOpen}
       />
+
+      {/* ── Strategic Request Reject Dialog ── */}
+      <Dialog open={!!srRejectTarget} onOpenChange={(v) => { if (!v) { setSrRejectTarget(null); setSrRejectNote('') } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <XCircle className="h-5 w-5 text-red-500" /> Reject Strategic Request
+            </DialogTitle>
+          </DialogHeader>
+          {srRejectTarget && (
+            <div className="space-y-4">
+              <div className="p-3 bg-muted rounded-lg">
+                <p className="font-semibold text-sm">{srRejectTarget.title}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">By {srRejectTarget.submitter.name}</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm font-medium">Rejection note (optional)</Label>
+                <Textarea
+                  placeholder="Explain why this request is being rejected…"
+                  value={srRejectNote}
+                  onChange={(e) => setSrRejectNote(e.target.value)}
+                  rows={3}
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => { setSrRejectTarget(null); setSrRejectNote('') }} disabled={srRejecting}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleSrReject}
+              disabled={srRejecting}>
+              {srRejecting ? 'Rejecting…' : <><XCircle className="mr-1.5 h-4 w-4" /> Confirm Reject</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

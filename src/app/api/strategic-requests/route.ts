@@ -11,6 +11,7 @@ export async function GET() {
       where: canSeeAll ? {} : { submitterId: session.id },
       include: {
         submitter: { select: { id: true, name: true } },
+        approver:  { select: { id: true, name: true } },
         tasks: {
           include: { assignee: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'asc' },
@@ -38,20 +39,52 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: 'Title and start date are required' }, { status: 400 })
     }
 
+    // ADMIN / MANAGER / PLANNER self-approve; PROJECT_LEAD requests go to PENDING_APPROVAL
+    const isApprover = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role)
+    const status = isApprover ? 'ACTIVE' : 'PENDING_APPROVAL'
+
     const sr = await prisma.strategicRequest.create({
       data: {
-        title: data.title,
+        title:       data.title,
         description: data.description || null,
-        startDate: new Date(data.startDate),
-        endDate: data.endDate ? new Date(data.endDate) : null,
+        startDate:   new Date(data.startDate),
+        endDate:     data.endDate ? new Date(data.endDate) : null,
         submitterId: session.id,
-        fileLinks: Array.isArray(data.fileLinks) ? data.fileLinks : [],
+        fileLinks:   Array.isArray(data.fileLinks) ? data.fileLinks : [],
+        status,
+        // Self-approve
+        ...(isApprover && {
+          approvedById: session.id,
+          approvedAt:   new Date(),
+        }),
       },
       include: {
         submitter: { select: { id: true, name: true } },
+        approver:  { select: { id: true, name: true } },
         tasks: { include: { assignee: { select: { id: true, name: true } } } },
       },
     })
+
+    // Notify all active ADMIN / MANAGER / PLANNER users when approval is needed
+    if (!isApprover) {
+      const approvers = await prisma.user.findMany({
+        where: { role: { in: ['ADMIN', 'MANAGER', 'PLANNER'] }, isActive: true },
+        select: { id: true },
+      })
+      if (approvers.length > 0) {
+        await prisma.notification.createMany({
+          data: approvers.map((a) => ({
+            userId:    a.id,
+            senderId:  session.id,
+            type:      'APPROVAL_REQUIRED' as const,
+            title:     'Strategic Request Pending Approval',
+            message:   `${session.name} submitted a strategic request: "${sr.title}"`,
+            actionUrl: '/approvals',
+          })),
+        })
+      }
+    }
+
     return Response.json(sr, { status: 201 })
   } catch (err: unknown) {
     if (err instanceof Error && err.message === 'Unauthorized') {

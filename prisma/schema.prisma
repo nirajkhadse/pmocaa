@@ -99,9 +99,11 @@ enum PlanStatus {
 }
 
 enum StrategicStatus {
+  PENDING_APPROVAL
   ACTIVE
   COMPLETED
   CANCELLED
+  REJECTED
 }
 
 enum LeaveType {
@@ -151,8 +153,9 @@ model User {
   taskOwnerChangesTo       TaskOwnerHistory[] @relation("TaskOwnerChangeTo")
   productHistoryChanges    ProductHistory[]   @relation("ProductHistoryChanger")
   productHistoryTargeted   ProductHistory[]   @relation("ProductHistoryTarget")
-  strategicRequestsSubmitted StrategicRequest[] @relation("StrategicRequestSubmitter")
-  strategicTasksAssigned     StrategicTask[]    @relation("StrategicTaskAssignee")
+  strategicRequestsSubmitted  StrategicRequest[] @relation("StrategicRequestSubmitter")
+  strategicRequestsApproved   StrategicRequest[] @relation("StrategicRequestApprover")
+  strategicTasksAssigned      StrategicTask[]    @relation("StrategicTaskAssignee")
   leaves                     Leave[]
   meetings                   Meeting[]
   documentLinks              DocumentLink[]     @relation("DocumentLinkCreator")
@@ -497,18 +500,22 @@ model ProductResource {
 }
 
 model StrategicRequest {
-  id          String          @id @default(cuid())
-  title       String
-  description String?
-  startDate   DateTime
-  endDate     DateTime?
-  status      StrategicStatus @default(ACTIVE)
-  submitterId String
-  fileLinks   String[]
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id           String          @id @default(cuid())
+  title        String
+  description  String?
+  startDate    DateTime
+  endDate      DateTime?
+  status       StrategicStatus @default(PENDING_APPROVAL)
+  submitterId  String
+  fileLinks    String[]
+  approvedById String?
+  approvedAt   DateTime?
+  approvalNote String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
   submitter User            @relation("StrategicRequestSubmitter", fields: [submitterId], references: [id], onDelete: Cascade)
+  approver  User?           @relation("StrategicRequestApprover", fields: [approvedById], references: [id], onDelete: SetNull)
   tasks     StrategicTask[]
 
   @@map("strategic_requests")

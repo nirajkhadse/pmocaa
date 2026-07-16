@@ -93,6 +93,8 @@ interface StrategicRequest {
   endDate?: string
   status: string
   submitter: { id: string; name: string }
+  approver?: { id: string; name: string }
+  approvalNote?: string
   tasks: StrategicTaskData[]
   fileLinks?: string[]
   createdAt: string
@@ -140,9 +142,11 @@ const TASK_STATUS_LABELS: Record<string, string> = {
 }
 
 const SR_STATUS_COLORS: Record<string, string> = {
+  PENDING_APPROVAL: 'bg-yellow-100 text-yellow-700',
   ACTIVE:    'bg-green-100 text-green-700',
   COMPLETED: 'bg-blue-100 text-blue-700',
   CANCELLED: 'bg-slate-100 text-slate-600',
+  REJECTED:  'bg-red-100 text-red-700',
 }
 
 const submitSchema = z.object({
@@ -737,6 +741,21 @@ export default function RequestsPage() {
     } finally { setDeleteSrBusy(false) }
   }
 
+  async function resubmitSr(id: string) {
+    try {
+      const res = await fetch(`/api/strategic-requests/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resubmit' }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed')
+      toast.success('Re-submitted for approval — managers have been notified')
+      loadSr()
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to resubmit')
+    }
+  }
+
   const filtered = requests.filter((r) =>
     r.title.toLowerCase().includes(search.toLowerCase()) ||
     r.description.toLowerCase().includes(search.toLowerCase()) ||
@@ -828,11 +847,15 @@ export default function RequestsPage() {
             >
               <Target className="h-4 w-4" />
               Strategic Requests
-              {srRequests.length > 0 && (
+              {srRequests.filter(r => r.status === 'PENDING_APPROVAL').length > 0 ? (
+                <span className="bg-orange-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">
+                  {srRequests.filter(r => r.status === 'PENDING_APPROVAL').length}
+                </span>
+              ) : srRequests.length > 0 ? (
                 <span className="bg-purple-100 text-purple-700 text-xs rounded-full px-1.5 py-0.5 leading-none">
                   {srRequests.length}
                 </span>
-              )}
+              ) : null}
             </button>
           )}
           <button
@@ -1183,7 +1206,11 @@ export default function RequestsPage() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="font-semibold text-sm">{sr.title}</h3>
                           <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${SR_STATUS_COLORS[sr.status] ?? 'bg-slate-100 text-slate-600'}`}>
-                            {sr.status}
+                            {sr.status === 'PENDING_APPROVAL' ? 'Pending Approval'
+                              : sr.status === 'ACTIVE' ? 'Active'
+                              : sr.status === 'REJECTED' ? 'Rejected'
+                              : sr.status === 'COMPLETED' ? 'Completed'
+                              : 'Cancelled'}
                           </span>
                           <span className="text-xs bg-muted px-1.5 py-0.5 rounded">
                             {sr.tasks.length} task{sr.tasks.length !== 1 ? 's' : ''}
@@ -1210,7 +1237,17 @@ export default function RequestsPage() {
                             {format(new Date(sr.startDate), 'MMM d, yyyy')}
                             {sr.endDate && ` – ${format(new Date(sr.endDate), 'MMM d, yyyy')}`}
                           </span>
+                          {sr.approver && (
+                            <span className={sr.status === 'REJECTED' ? 'text-red-600' : 'text-green-600'}>
+                              {sr.status === 'REJECTED' ? '✗' : '✓'} {sr.approver.name}
+                            </span>
+                          )}
                         </div>
+                        {sr.status === 'REJECTED' && sr.approvalNote && (
+                          <p className="mt-1 text-xs text-red-600 bg-red-50 rounded px-2 py-1">
+                            Reason: {sr.approvalNote}
+                          </p>
+                        )}
 
                         {/* Tasks list */}
                         {expanded && sr.tasks.length > 0 && (
@@ -1249,19 +1286,29 @@ export default function RequestsPage() {
                         )}
                       </div>
 
-                      {/* Edit/Delete */}
-                      {canEditSr && (
-                        <div className="flex gap-1 shrink-0">
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                            onClick={() => openEditSr(sr)}>
-                            <Pencil className="h-3.5 w-3.5" />
+                      {/* Edit/Delete/Re-submit */}
+                      <div className="flex gap-1 shrink-0 flex-wrap justify-end">
+                        {/* Re-submit button for rejected requests (owner only) */}
+                        {sr.status === 'REJECTED' && user?.id === sr.submitter.id && (
+                          <Button size="sm" variant="outline"
+                            className="h-7 text-xs text-yellow-700 border-yellow-300 hover:bg-yellow-50"
+                            onClick={() => resubmitSr(sr.id)}>
+                            <RefreshCw className="mr-1 h-3 w-3" /> Re-submit
                           </Button>
-                          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
-                            onClick={() => setDeleteSrId(sr.id)}>
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      )}
+                        )}
+                        {canEditSr && (
+                          <>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                              onClick={() => openEditSr(sr)}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
+                              onClick={() => setDeleteSrId(sr.id)}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
