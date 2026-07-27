@@ -9,6 +9,9 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    // Runtime traffic uses Supabase's transaction pooler, while schema changes
+    // need the session/direct connection because `prisma db push` uses DDL and
+    // advisory locking that transaction pooling cannot reliably support.
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });
