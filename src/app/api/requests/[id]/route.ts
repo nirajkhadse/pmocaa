@@ -222,6 +222,93 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/requests/[
       return Response.json(request)
     }
 
+    // Approval and its generated task are one logical write. Previously the
+    // approval committed first and task-creation failures were swallowed,
+    // leaving an approved request without a durable work item.
+    if (data.status === 'APPROVED' && existing.status !== 'APPROVED') {
+      const effectiveAssigneeId: string | null = data.assigneeId || existing.assigneeId || null
+      if (!effectiveAssigneeId) {
+        return Response.json({ error: 'An assignee is required before approval' }, { status: 400 })
+      }
+
+      const workstream = await getOrCreateDirectWorkstream(session.id)
+      const taskHours = existing.isRecurring && existing.hoursPerDay
+        ? existing.hoursPerDay * countWorkingDays(
+            existing.startDate ?? new Date(),
+            existing.endDate ?? new Date(),
+          )
+        : existing.estimatedHours || 8
+
+      const { request, task } = await prisma.$transaction(async (tx) => {
+        const savedRequest = await tx.request.update({
+          where: { id },
+          data: {
+            status: 'APPROVED',
+            ...(data.priority !== undefined && { priority: data.priority }),
+            ...(data.assigneeId !== undefined && { assigneeId: data.assigneeId || null }),
+            ...(data.assignedById !== undefined && { assignedById: data.assignedById || null }),
+            ...(data.notes !== undefined && { notes: data.notes }),
+            ...(data.estimatedHours !== undefined && { estimatedHours: data.estimatedHours ? parseFloat(data.estimatedHours) : null }),
+            ...(data.fileLinks !== undefined && { fileLinks: Array.isArray(data.fileLinks) ? data.fileLinks : [] }),
+          },
+          include: {
+            assignee: { select: { id: true, name: true } },
+            assignedBy: { select: { id: true, name: true } },
+          },
+        })
+
+        const generatedTask = await tx.task.create({
+          data: {
+            name: existing.title,
+            description: existing.description || null,
+            workstreamId: workstream.id,
+            ownerId: effectiveAssigneeId,
+            assignedById: existing.submitterId,
+            approvedById: session.id,
+            priority: savedRequest.priority,
+            status: 'PLANNED',
+            estimatedHours: taskHours,
+            startDate: existing.startDate ?? null,
+            endDate: existing.endDate ?? null,
+          },
+        })
+
+        return { request: savedRequest, task: generatedTask }
+      }, { maxWait: 10_000, timeout: 20_000 })
+
+      if (effectiveAssigneeId !== session.id) {
+        const requestedBy = existing.submitterId !== session.id
+          ? ` - Requested by ${existing.submitter?.name ?? 'someone'}`
+          : ''
+        await prisma.notification.create({
+          data: {
+            userId: effectiveAssigneeId,
+            senderId: session.id,
+            type: 'TASK_ASSIGNED',
+            title: 'Work Assigned - Request Approved',
+            message: `${session.name} approved and assigned you: "${existing.title}" - ${taskHours}h${requestedBy}. Open Kanban to start.`,
+            taskId: task.id,
+            actionUrl: '/kanban',
+          },
+        }).catch((error) => console.error('[REQUESTS APPROVE NOTIFICATION]', error))
+      }
+
+      if (existing.submitterId !== session.id) {
+        await prisma.notification.create({
+          data: {
+            userId: existing.submitterId,
+            senderId: session.id,
+            type: 'APPROVAL_COMPLETED',
+            title: 'Request Approved',
+            message: `Your request "${existing.title}" has been approved!`,
+            actionUrl: '/requests',
+          },
+        }).catch((error) => console.error('[REQUESTS APPROVE NOTIFICATION]', error))
+      }
+
+      return Response.json(request)
+    }
+
     const request = await prisma.request.update({
       where: { id },
       data: {

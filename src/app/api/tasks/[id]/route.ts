@@ -95,82 +95,102 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/tasks/[id]
     // the original schedule. Previously open to any authenticated user — tightened here.
     const canEditActualDates = canEditDates || existing.ownerId === session.id
 
-    // Only count ownerId as "changed" if the caller is actually allowed to reassign
-    const ownerChanged = canAssign && data.ownerId !== undefined && data.ownerId !== existing.ownerId
+    const requestedOwnerId = data.ownerId ? String(data.ownerId) : null
+    const ownerChanged = data.ownerId !== undefined && requestedOwnerId !== existing.ownerId
+    const startDateChanged = data.startDate !== undefined &&
+      (data.startDate ? new Date(data.startDate).getTime() : null) !== (existing.startDate?.getTime() ?? null)
+    const endDateChanged = data.endDate !== undefined &&
+      (data.endDate ? new Date(data.endDate).getTime() : null) !== (existing.endDate?.getTime() ?? null)
+    const actualStartDateChanged = data.actualStartDate !== undefined &&
+      (data.actualStartDate ? new Date(data.actualStartDate).getTime() : null) !== (existing.actualStartDate?.getTime() ?? null)
+    const actualEndDateChanged = data.actualEndDate !== undefined &&
+      (data.actualEndDate ? new Date(data.actualEndDate).getTime() : null) !== (existing.actualEndDate?.getTime() ?? null)
 
-    // Create history entry and update statusChangedAt when status changes
-    if (statusChanged) {
-      const durationMinutes = Math.round(
-        (Date.now() - existing.statusChangedAt.getTime()) / 60000
-      )
-      await prisma.taskHistory.create({
-        data: {
-          taskId: id,
-          fromStatus: existing.status,
-          toStatus: data.status,
-          changedAt: new Date(),
-          durationMinutes,
-          note: data.reviewNote || data.reworkNote || null,
-          changedById: session.id,
-        },
-      })
+    // Never report a successful save when a requested field was silently ignored.
+    // The old behavior returned 200 and caused the UI to look updated until its next refresh.
+    if (ownerChanged && !canAssign) {
+      return Response.json({ error: 'You do not have permission to reassign this task' }, { status: 403 })
+    }
+    if ((startDateChanged || endDateChanged) && !canEditDates) {
+      return Response.json({ error: 'You do not have permission to edit the task schedule' }, { status: 403 })
+    }
+    if ((actualStartDateChanged || actualEndDateChanged) && !canEditActualDates) {
+      return Response.json({ error: 'You do not have permission to edit actual task dates' }, { status: 403 })
     }
 
-    // Log owner change history
-    if (ownerChanged) {
-      await prisma.taskOwnerHistory.create({
-        data: {
-          taskId: id,
-          fromOwnerId: existing.ownerId || null,
-          toOwnerId: data.ownerId || null,
-          changedById: session.id,
-        },
-      })
-    }
+    // History and the task mutation must commit together. Previously history was
+    // written first, so a later task-update failure left an audit entry claiming
+    // an assignment that was never actually persisted.
+    const task = await prisma.$transaction(async (tx) => {
+      if (statusChanged) {
+        const durationMinutes = Math.round(
+          (Date.now() - existing.statusChangedAt.getTime()) / 60000
+        )
+        await tx.taskHistory.create({
+          data: {
+            taskId: id,
+            fromStatus: existing.status,
+            toStatus: data.status,
+            changedAt: new Date(),
+            durationMinutes,
+            note: data.reviewNote || data.reworkNote || null,
+            changedById: session.id,
+          },
+        })
+      }
 
-    const task = await prisma.task.update({
-      where: { id },
-      data: {
-        ...(data.name !== undefined && { name: data.name }),
-        ...(data.description !== undefined && { description: data.description }),
-        ...(data.status !== undefined && { status: data.status }),
-        ...(statusChanged && { statusChangedAt: new Date() }),
-        ...(statusChanged && data.status === 'REWORK' && { reworkCount: { increment: 1 } }),
-        ...(data.priority !== undefined && { priority: data.priority }),
-        // Scheduled (original) dates: ADMIN/MANAGER/PLANNER, workstream lead, or project lead with granted access
-        ...(data.startDate !== undefined && canEditDates && {
-          startDate: data.startDate ? new Date(data.startDate) : null,
-        }),
-        ...(data.endDate !== undefined && canEditDates && {
-          endDate: data.endDate ? new Date(data.endDate) : null,
-        }),
-        // Actual dates: task owner, or anyone who can edit the original schedule
-        ...(data.actualStartDate !== undefined && canEditActualDates && {
-          actualStartDate: data.actualStartDate ? new Date(data.actualStartDate) : null,
-        }),
-        ...(data.actualEndDate !== undefined && canEditActualDates && {
-          actualEndDate: data.actualEndDate ? new Date(data.actualEndDate) : null,
-        }),
-        ...(data.pctComplete !== undefined && { pctComplete: Math.min(100, Math.max(0, Number(data.pctComplete))) }),
-        ...(data.comments !== undefined && { comments: data.comments ?? null }),
-        ...(data.effortHours !== undefined && { effortHours: data.effortHours }),
-        ...(data.estimatedHours !== undefined && { estimatedHours: data.estimatedHours }),
-        ...(data.ownerId !== undefined && canAssign && { ownerId: data.ownerId || null }),
-        // Track who reassigned the task
-        ...(ownerChanged && { assignedById: session.id }),
-        ...(data.order !== undefined && { order: data.order }),
-        ...(data.tags !== undefined && { tags: data.tags }),
-      },
-      include: {
-        owner: { select: { id: true, name: true, avatarUrl: true } },
-        workstream: {
-          include: {
-            project: { select: { id: true, name: true, leadId: true } },
-            lead: { select: { id: true, name: true } },
+      if (ownerChanged) {
+        await tx.taskOwnerHistory.create({
+          data: {
+            taskId: id,
+            fromOwnerId: existing.ownerId || null,
+            toOwnerId: requestedOwnerId,
+            changedById: session.id,
+          },
+        })
+      }
+
+      return tx.task.update({
+        where: { id },
+        data: {
+          ...(data.name !== undefined && { name: data.name }),
+          ...(data.description !== undefined && { description: data.description }),
+          ...(data.status !== undefined && { status: data.status }),
+          ...(statusChanged && { statusChangedAt: new Date() }),
+          ...(statusChanged && data.status === 'REWORK' && { reworkCount: { increment: 1 } }),
+          ...(data.priority !== undefined && { priority: data.priority }),
+          ...(data.startDate !== undefined && canEditDates && {
+            startDate: data.startDate ? new Date(data.startDate) : null,
+          }),
+          ...(data.endDate !== undefined && canEditDates && {
+            endDate: data.endDate ? new Date(data.endDate) : null,
+          }),
+          ...(data.actualStartDate !== undefined && canEditActualDates && {
+            actualStartDate: data.actualStartDate ? new Date(data.actualStartDate) : null,
+          }),
+          ...(data.actualEndDate !== undefined && canEditActualDates && {
+            actualEndDate: data.actualEndDate ? new Date(data.actualEndDate) : null,
+          }),
+          ...(data.pctComplete !== undefined && { pctComplete: Math.min(100, Math.max(0, Number(data.pctComplete))) }),
+          ...(data.comments !== undefined && { comments: data.comments ?? null }),
+          ...(data.effortHours !== undefined && { effortHours: data.effortHours }),
+          ...(data.estimatedHours !== undefined && { estimatedHours: data.estimatedHours }),
+          ...(data.ownerId !== undefined && canAssign && { ownerId: requestedOwnerId }),
+          ...(ownerChanged && { assignedById: session.id }),
+          ...(data.order !== undefined && { order: data.order }),
+          ...(data.tags !== undefined && { tags: data.tags }),
+        },
+        include: {
+          owner: { select: { id: true, name: true, avatarUrl: true } },
+          workstream: {
+            include: {
+              project: { select: { id: true, name: true, leadId: true } },
+              lead: { select: { id: true, name: true } },
+            },
           },
         },
-      },
-    })
+      })
+    }, { maxWait: 10_000, timeout: 20_000 })
 
     if (ownerChanged && task.ownerId && task.ownerId !== session.id) {
       await notifyTaskAssigned(

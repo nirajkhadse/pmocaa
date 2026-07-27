@@ -184,11 +184,18 @@ export function WorkstreamPanel({ project, onRefresh, productId, onlyDeliverable
 
   async function assignTask(taskId: string, ownerId: string | null) {
     try {
-      await fetch(`/api/tasks/${taskId}`, {
+      const res = await fetch(`/api/tasks/${taskId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ownerId: ownerId || null }),
       })
+      const result = await res.json().catch(() => null)
+      if (!res.ok) {
+        throw new Error(result?.error || 'Failed to assign task')
+      }
+      if ((result?.ownerId ?? null) !== (ownerId || null)) {
+        throw new Error('The assignment was not persisted')
+      }
       onRefresh()
       if (ownerId) {
         const person = allUsers.find((u) => u.id === ownerId)
@@ -199,8 +206,8 @@ export function WorkstreamPanel({ project, onRefresh, productId, onlyDeliverable
           })
         }
       }
-    } catch {
-      toast.error('Failed to assign task')
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Failed to assign task')
     }
   }
 

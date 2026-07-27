@@ -400,12 +400,16 @@ export default function KanbanPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ownerId: editAssigneeId }),
       })
-      if (!res.ok) throw new Error()
+      const updated = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(updated?.error || 'Failed to update assignee')
+      if ((updated?.ownerId ?? null) !== (editAssigneeId ?? null)) {
+        throw new Error('The assignment was not persisted')
+      }
       toast.success('Assignee updated')
       setDetailOpen(false)
       await load()
-    } catch {
-      toast.error('Failed to update assignee')
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update assignee')
     } finally {
       setSavingAssignee(false)
     }
