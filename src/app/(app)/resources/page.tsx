@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useAuthStore } from '@/store/auth'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -195,7 +195,7 @@ function ResourceGanttView() {
       const f = toDateKey(dateRange.from)
       const t = toDateKey(dateRange.to)
       try {
-        const r = await fetch(`/api/resources?from=${f}&to=${t}`)
+        const r = await fetch(`/api/resources?from=${f}&to=${t}`, { cache: 'no-store' })
         const d = await r.json()
         setGanttData(Array.isArray(d) ? d : [])
       } catch { /* silent */ } finally {
@@ -606,7 +606,7 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
     if (!dateFilter || !resource) { setDayResource(null); return }
     setDayLoading(true)
     setFocusedId(null)
-    fetch(`/api/resources?from=${dateFilter}&to=${dateFilter}`)
+    fetch(`/api/resources?from=${dateFilter}&to=${dateFilter}`, { cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         const match = Array.isArray(d) ? d.find((r: Resource) => r.id === resource.id) : null
@@ -1158,6 +1158,7 @@ export default function ResourcesPage() {
   const { user } = useAuthStore()
   const [resources, setResources] = useState<Resource[]>([])
   const [loading,   setLoading]   = useState(true)
+  const loadInFlightRef = useRef(false)
   const [search,    setSearch]    = useState('')
   const [filter,    setFilter]    = useState<string | null>('ALL')
   const [view,      setView]      = useState<'cards' | 'gantt'>('cards')
@@ -1176,17 +1177,26 @@ export default function ResourcesPage() {
   const canAssign = canAccess
 
   const load = () => {
+    if (loadInFlightRef.current) return
+    loadInFlightRef.current = true
     setLoading(true)
-    fetch('/api/resources').then(r => r.json()).then(d => {
+    fetch('/api/resources', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(20_000),
+    }).then(r => r.json()).then(d => {
       setResources(Array.isArray(d) ? d : [])
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch(() => setLoading(false)).finally(() => {
+      loadInFlightRef.current = false
+    })
   }
 
   useEffect(() => {
     const doLoad = async () => { load() }
     doLoad()
-    const interval = setInterval(load, 30000)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, 30000)
     return () => clearInterval(interval)
   }, [])
 

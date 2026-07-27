@@ -89,6 +89,7 @@ export default function ProjectDetailPage() {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('report')
   const teardownMigratedRef = useRef(false)
+  const loadInFlightRef = useRef(false)
 
   // Edit project dialog
   const [editProjectOpen, setEditProjectOpen] = useState(false)
@@ -146,10 +147,16 @@ export default function ProjectDetailPage() {
   const [crToggling, setCrToggling] = useState(false)
 
   const load = useCallback(async () => {
+    if (loadInFlightRef.current) return
+    loadInFlightRef.current = true
     try {
+      const requestOptions: RequestInit = {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(20_000),
+      }
       const [projRes, prodRes] = await Promise.all([
-        fetch(`/api/projects/${id}`),
-        fetch(`/api/projects/${id}/products`),
+        fetch(`/api/projects/${id}`, requestOptions),
+        fetch(`/api/projects/${id}/products`, requestOptions),
       ])
       if (!projRes.ok) { router.push('/projects'); return }
       const data = await projRes.json()
@@ -174,13 +181,16 @@ export default function ProjectDetailPage() {
         }
       }
     } finally {
+      loadInFlightRef.current = false
       setLoading(false)
     }
   }, [id, router])
 
   useEffect(() => {
     load()
-    const interval = setInterval(load, 10000)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, 30000)
     const onVisible = () => { if (document.visibilityState === 'visible') load() }
     document.addEventListener('visibilitychange', onVisible)
     return () => {

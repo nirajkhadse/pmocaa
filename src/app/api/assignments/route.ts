@@ -81,6 +81,11 @@ export async function POST(req: NextRequest) {
           message: `${session.name} assigned you: "${name}"${estimatedHours ? ` (${estimatedHours}h estimated)` : ''}${endDate ? ` · due ${new Date(endDate).toLocaleDateString()}` : ''}`,
           actionUrl: '/kanban',
         },
+      }).catch((error) => {
+        // The assignment is the primary write. A temporary notification
+        // failure must not turn a successfully-created task into a 500 response
+        // that encourages the user to retry and create a duplicate.
+        console.error('[ASSIGNMENT NOTIFICATION]', error)
       })
     }
 

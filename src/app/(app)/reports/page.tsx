@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -109,7 +109,8 @@ function MyUtilizationReport({ userId }: { userId: string }) {
   const [dailyMap, setDailyMap]   = useState<Record<string, number>>({})
   const [capacityPct, setCap]     = useState(100)
   const [tasks, setTasks]         = useState<MyTask[]>([])
-  const [loading, setLoading]     = useState(false)
+  const [loading, setLoading]     = useState(true)
+  const loadInFlightRef = useRef(false)
 
   const dateRange = useMemo(() => {
     const now = new Date(); now.setHours(0, 0, 0, 0)
@@ -130,16 +131,40 @@ function MyUtilizationReport({ userId }: { userId: string }) {
   }, [period, specificDay, todayStr])
 
   useEffect(() => {
-    setLoading(true)
-    Promise.all([
-      fetch(`/api/resources?from=${dateRange.from}&to=${dateRange.to}`).then(r => r.json()),
-      fetch(`/api/tasks?ownerId=${userId}`).then(r => r.json()),
-    ]).then(([resources, allTasks]) => {
-      const me = Array.isArray(resources) ? resources.find((r: { id: string }) => r.id === userId) : null
-      setDailyMap(me?.dailyHoursMap ?? {})
-      setCap(me?.capacityPct ?? 100)
-      setTasks(Array.isArray(allTasks) ? allTasks : [])
-    }).catch(() => {}).finally(() => setLoading(false))
+    let active = true
+    const load = () => {
+      if (loadInFlightRef.current) return
+      loadInFlightRef.current = true
+      Promise.all([
+        fetch(`/api/resources?from=${dateRange.from}&to=${dateRange.to}`, {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(20_000),
+        }).then(r => r.json()),
+        fetch(`/api/tasks?ownerId=${userId}`, {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(20_000),
+        }).then(r => r.json()),
+      ]).then(([resources, allTasks]) => {
+        if (!active) return
+        const me = Array.isArray(resources) ? resources.find((r: { id: string }) => r.id === userId) : null
+        setDailyMap(me?.dailyHoursMap ?? {})
+        setCap(me?.capacityPct ?? 100)
+        setTasks(Array.isArray(allTasks) ? allTasks : [])
+      }).catch(() => {}).finally(() => {
+        loadInFlightRef.current = false
+        if (active) setLoading(false)
+      })
+    }
+    load()
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, 30000)
+    window.addEventListener('focus', load)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', load)
+    }
   }, [dateRange, userId])
 
   const dailyCap   = Math.round(8  * capacityPct / 100 * 10) / 10
@@ -421,17 +446,42 @@ export default function ReportsPage() {
   const [projects,  setProjects]  = useState<Project[]>([])
   const [resources, setResources] = useState<PortfolioResource[]>([])
   const [loading,   setLoading]   = useState(true)
+  const loadInFlightRef = useRef(false)
 
   useEffect(() => {
-    if (!canManage) { setLoading(false); return }
-    Promise.all([
-      fetch('/api/projects').then(r => r.json()),
-      fetch('/api/resources').then(r => r.json()),
-    ]).then(([p, r]) => {
-      setProjects(Array.isArray(p) ? p : [])
-      setResources(Array.isArray(r) ? r : [])
-      setLoading(false)
-    })
+    if (!canManage) return
+    let active = true
+    const load = () => {
+      if (loadInFlightRef.current) return
+      loadInFlightRef.current = true
+      Promise.all([
+        fetch('/api/projects', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(20_000),
+        }).then(r => r.json()),
+        fetch('/api/resources', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(20_000),
+        }).then(r => r.json()),
+      ]).then(([p, r]) => {
+        if (!active) return
+        setProjects(Array.isArray(p) ? p : [])
+        setResources(Array.isArray(r) ? r : [])
+        setLoading(false)
+      }).catch(() => {}).finally(() => {
+        loadInFlightRef.current = false
+      })
+    }
+    load()
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, 30000)
+    window.addEventListener('focus', load)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', load)
+    }
   }, [canManage])
 
   // Non-managers (RESOURCE, PROJECT_LEAD, WORKSTREAM_LEAD, LEADERSHIP) get personal utilization

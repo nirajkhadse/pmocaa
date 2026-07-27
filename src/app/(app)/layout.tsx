@@ -18,6 +18,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [notifPermission,      setNotifPermission]      = useState<NotificationPermission | 'unsupported' | null>(null)
   const [notifBannerDismissed, setNotifBannerDismissed] = useState(false)
   const prevUnreadRef = useRef<number | null>(null)
+  const countsInFlightRef = useRef(false)
 
   // Check notification API support and current permission
   useEffect(() => {
@@ -31,7 +32,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     async function checkAuth() {
       try {
-        const res = await fetch('/api/auth/me')
+        const res = await fetch('/api/auth/me', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(15_000),
+        })
         if (!res.ok) {
           setUser(null)
           router.push('/login')
@@ -51,8 +55,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) return
     const fetchCounts = async () => {
+      if (countsInFlightRef.current) return
+      countsInFlightRef.current = true
       try {
-        const res = await fetch('/api/notifications?unread=true')
+        const res = await fetch('/api/notifications?unread=true', {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(15_000),
+        })
         if (res.ok) {
           const data = await res.json()
           const newCount: number = data.unreadCount || 0
@@ -83,19 +92,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           prevUnreadRef.current = newCount
           setUnreadCount(newCount)
         }
-      } catch {}
-      if (['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role)) {
-        try {
-          const res = await fetch('/api/requests?status=SUBMITTED')
+        if (['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role)) {
+          const res = await fetch('/api/requests?status=SUBMITTED', {
+            cache: 'no-store',
+            signal: AbortSignal.timeout(15_000),
+          })
           if (res.ok) {
             const data = await res.json()
             setPendingRequestsCount(Array.isArray(data) ? data.length : 0)
           }
-        } catch {}
+        }
+      } catch {
+        // Keep the last good badge counts during a temporary DB/network issue.
+      } finally {
+        countsInFlightRef.current = false
       }
     }
     fetchCounts()
-    const interval = setInterval(fetchCounts, 30000)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchCounts()
+    }, 60000)
     return () => clearInterval(interval)
   }, [user])
 

@@ -45,6 +45,7 @@ function countWorkingDays(start: Date, end: Date): number {
 function calcCompletedHours(
   tasks: Array<{
     estimatedHours: number | null
+    createdAt: Date
     startDate: Date | null
     endDate: Date | null
     statusChangedAt: Date | null
@@ -59,7 +60,10 @@ function calcCompletedHours(
     const hrs = task.estimatedHours ?? 0
     if (hrs === 0) continue
     // Work window = startDate → statusChangedAt (the actual time span)
-    const workStart = task.startDate ?? new Date(task.statusChangedAt.getTime() - 7 * 24 * 60 * 60 * 1000)
+    // If no schedule start was supplied, use the actual assignment/creation time.
+    // The old seven-day fallback made a task assigned and completed today retain
+    // only a small fraction of its hours, falsely freeing utilization immediately.
+    const workStart = task.startDate ?? task.createdAt
     const workEnd   = task.statusChangedAt
     const overlapStart = new Date(Math.max(workStart.getTime(), rangeStart.getTime()))
     const overlapEnd   = new Date(Math.min(workEnd.getTime(),   rangeEnd.getTime()))
@@ -193,6 +197,7 @@ export async function GET(req: NextRequest) {
             description: true,
             status: true,
             priority: true,
+            effortHours: true,
             estimatedHours: true,
             pctComplete: true,
             startDate: true,
@@ -209,7 +214,7 @@ export async function GET(req: NextRequest) {
           orderBy: [{ endDate: 'asc' }, { priority: 'asc' }],
         },
         assignedRequests: {
-          where: { status: { in: ['SUBMITTED', 'REVIEW'] } },
+          where: { status: { in: ['SUBMITTED', 'REVIEW', 'APPROVED'] } },
           select: {
             id: true,
             title: true,
@@ -245,6 +250,7 @@ export async function GET(req: NextRequest) {
         name: true,
         priority: true,
         estimatedHours: true,
+        createdAt: true,
         startDate: true,
         endDate: true,
         statusChangedAt: true,
@@ -338,8 +344,25 @@ export async function GET(req: NextRequest) {
 
       const pendingRequestItems = user.assignedRequests.map(toWorkItem)
 
-      // Strategic tasks also count toward utilization
-      const userStrategicItems = (strategicByUser.get(user.id) ?? []).map(st => {
+      // If an approved request has no generated task (legacy data or a failed
+      // conversion), count the request itself so approval still affects load.
+      const materializedDirectTaskNames = new Set(
+        user.ownedTasks
+          .filter(t => t.workstream.project.name === '__direct_assignments__')
+          .map(t => t.name.trim().toLowerCase())
+      )
+      const unmaterializedApprovedItems = user.assignedRequests
+        .filter(r =>
+          r.status === 'APPROVED' &&
+          !materializedDirectTaskNames.has(r.title.trim().toLowerCase())
+        )
+        .map(toWorkItem)
+
+      // Completed/cancelled strategic work no longer reserves capacity.
+      const activeStrategicTasks = (strategicByUser.get(user.id) ?? []).filter(st =>
+        !['COMPLETED', 'CANCELLED'].includes((st.status ?? '').toUpperCase())
+      )
+      const userStrategicItems = activeStrategicTasks.map(st => {
         let estimatedHours: number
         if (st.isRecurring && st.hoursPerDay) {
           const s = st.startDate ?? new Date()
@@ -351,18 +374,35 @@ export async function GET(req: NextRequest) {
         return { estimatedHours, startDate: st.startDate, endDate: st.endDate }
       })
 
-      // Tasks (approved) + REVIEW requests + strategic tasks drive utilization
-      const allWorkItems = [...user.ownedTasks, ...reviewRequestItems, ...userStrategicItems]
+      // Logged effort is cumulative rather than date-stamped. Use it when it
+      // exceeds the estimate so overruns update utilization without counting
+      // planned and actual hours twice.
+      const ownedWorkItems = user.ownedTasks.map(t => ({
+        ...t,
+        estimatedHours: Math.max(t.estimatedHours || 0, t.effortHours || 0),
+      }))
+
+      const allWorkItems = [
+        ...ownedWorkItems,
+        ...reviewRequestItems,
+        ...unmaterializedApprovedItems,
+        ...userStrategicItems,
+      ]
 
       // For weekly utilization: overdue IN_PROGRESS/REWORK tasks (endDate before this week) get their
       // dates nulled so calcDailyHours spreads their hours across the current week instead of skipping them.
-      const weeklyTasks = user.ownedTasks.map((t) =>
+      const weeklyTasks = ownedWorkItems.map((t) =>
         (t.status === 'IN_PROGRESS' || t.status === 'REWORK') &&
         t.endDate && new Date(t.endDate) < weekStart
           ? { ...t, startDate: null as Date | null, endDate: null as Date | null }
           : t
       )
-      const weeklyWorkItems = [...weeklyTasks, ...reviewRequestItems, ...userStrategicItems]
+      const weeklyWorkItems = [
+        ...weeklyTasks,
+        ...reviewRequestItems,
+        ...unmaterializedApprovedItems,
+        ...userStrategicItems,
+      ]
 
       // dailyHoursMap covers the requested range (gantt) or current week (default)
       const dailyHoursMap = calcDailyHours(
@@ -430,7 +470,7 @@ export async function GET(req: NextRequest) {
       ) / 10
 
       const totalTaskHours = Math.round(
-        (user.ownedTasks.reduce((s, t) => s + (t.estimatedHours || 0), 0) + strategicTaskHours) * 10
+        (ownedWorkItems.reduce((s, t) => s + (t.estimatedHours || 0), 0) + strategicTaskHours) * 10
       ) / 10
 
       const directTaskHours = Math.round(
@@ -501,7 +541,7 @@ export async function GET(req: NextRequest) {
         isOverloadedWeekly,
         isOverloadedDaily,
         overloadReason,
-        activeTasks: user.ownedTasks.length + (strategicByUser.get(user.id)?.length ?? 0),
+        activeTasks: user.ownedTasks.length + activeStrategicTasks.length,
         // Leave
         leaveDates,
         isOnLeaveToday,
@@ -539,7 +579,9 @@ export async function GET(req: NextRequest) {
       }
     })
 
-    return Response.json(withUtilization)
+    return Response.json(withUtilization, {
+      headers: { 'Cache-Control': 'no-store, max-age=0' },
+    })
   } catch (err: unknown) {
     if (err instanceof Error && err.message === 'Unauthorized') {
       return Response.json({ error: 'Unauthorized' }, { status: 401 })

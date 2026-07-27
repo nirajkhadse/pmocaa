@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useAuthStore } from '@/store/auth'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -199,6 +199,7 @@ export default function DashboardPage() {
   const [myTasks, setMyTasks] = useState<Task[]>([])
   const [pendingApprovals, setPendingApprovals] = useState(0)
   const [loading, setLoading] = useState(true)
+  const loadInFlightRef = useRef(false)
 
   const isResource  = user?.role === 'RESOURCE'
   const canManage   = !!user && ['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role)
@@ -207,20 +208,26 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function loadData() {
+      if (loadInFlightRef.current) return
+      loadInFlightRef.current = true
+      const requestOptions: RequestInit = {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(20_000),
+      }
       try {
         if (isResource) {
           const [projRes, taskRes] = await Promise.all([
-            fetch('/api/projects'),
-            fetch('/api/tasks'),
+            fetch('/api/projects', requestOptions),
+            fetch('/api/tasks', requestOptions),
           ])
           const [proj, tasks] = await Promise.all([projRes.json(), taskRes.json()])
           setProjects(Array.isArray(proj) ? proj : [])
           setMyTasks(Array.isArray(tasks) ? tasks : [])
         } else if (canManage) {
           const [projRes, resRes, changesRes] = await Promise.all([
-            fetch('/api/projects'),
-            fetch('/api/resources'),
-            fetch('/api/schedule-changes?status=PENDING'),
+            fetch('/api/projects', requestOptions),
+            fetch('/api/resources', requestOptions),
+            fetch('/api/schedule-changes?status=PENDING', requestOptions),
           ])
           const [proj, res, changes] = await Promise.all([
             projRes.json(),
@@ -232,17 +239,20 @@ export default function DashboardPage() {
           setPendingApprovals(Array.isArray(changes) ? changes.length : 0)
         } else {
           // PROJECT_LEAD, WORKSTREAM_LEAD, LEADERSHIP — projects only, no resource data
-          const proj = await fetch('/api/projects').then(r => r.json())
+          const proj = await fetch('/api/projects', requestOptions).then(r => r.json())
           setProjects(Array.isArray(proj) ? proj : [])
         }
       } catch (err) {
         console.error(err)
       } finally {
+        loadInFlightRef.current = false
         setLoading(false)
       }
     }
     loadData()
-    const interval = setInterval(loadData, 30000)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadData()
+    }, 60000)
     return () => clearInterval(interval)
   }, [isResource])
 

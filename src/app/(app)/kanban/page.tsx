@@ -166,13 +166,20 @@ export default function KanbanPage() {
 
   // Use a ref for load so the interval doesn't capture stale closures
   const loadRef = useRef<(() => Promise<void>) | undefined>(undefined)
+  const loadInFlightRef = useRef(false)
 
   const load = useCallback(async () => {
+    if (loadInFlightRef.current) return
+    loadInFlightRef.current = true
     try {
+      const requestOptions: RequestInit = {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(20_000),
+      }
       const [taskRes, projRes, srRes] = await Promise.all([
-        fetch('/api/tasks'),
-        fetch('/api/projects'),
-        fetch('/api/strategic-tasks'),
+        fetch('/api/tasks', requestOptions),
+        fetch('/api/projects', requestOptions),
+        fetch('/api/strategic-tasks', requestOptions),
       ])
       const [taskData, projData, srData] = await Promise.all([taskRes.json(), projRes.json(), srRes.json()])
       const allTasks = [
@@ -182,6 +189,7 @@ export default function KanbanPage() {
       setTasks(allTasks)
       setProjects(Array.isArray(projData) ? projData : [])
     } finally {
+      loadInFlightRef.current = false
       setLoading(false)
     }
   }, [])
@@ -190,8 +198,9 @@ export default function KanbanPage() {
 
   useEffect(() => {
     load()
-    // Poll every 5 s so status changes appear within seconds
-    const interval = setInterval(() => loadRef.current?.(), 5000)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadRef.current?.()
+    }, 15000)
     return () => clearInterval(interval)
   }, [load])
 

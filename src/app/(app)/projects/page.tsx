@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuthStore, canCreateProject } from '@/store/auth'
@@ -141,16 +141,23 @@ export default function ProjectsPage() {
   const isProjectLead = user?.role === 'PROJECT_LEAD'
   const defaultView = isProjectLead ? 'mine' : 'portfolio'
   const [viewMode, setViewMode] = useState<'portfolio' | 'mine'>(defaultView)
+  const loadInFlightRef = useRef(false)
 
   const pageTitle = isProjectLead ? 'My Projects' : viewMode === 'mine' ? 'My Projects' : 'All Projects'
 
   const load = async () => {
+    if (loadInFlightRef.current) return
+    loadInFlightRef.current = true
     try {
       const url = viewMode === 'mine' ? '/api/projects?view=mine' : '/api/projects'
-      const res = await fetch(url)
+      const res = await fetch(url, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(20_000),
+      })
       const data = await res.json()
       setProjects(Array.isArray(data) ? data : [])
     } finally {
+      loadInFlightRef.current = false
       setLoading(false)
     }
   }
@@ -158,7 +165,9 @@ export default function ProjectsPage() {
   useEffect(() => {
     setLoading(true)
     load()
-    const interval = setInterval(load, 10000)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, 30000)
     // Refresh immediately when switching back to this tab
     const onVisible = () => { if (document.visibilityState === 'visible') load() }
     document.addEventListener('visibilitychange', onVisible)
