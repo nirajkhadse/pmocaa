@@ -6,8 +6,8 @@ import { CATEGORY_TEMPLATES } from '@/lib/project-templates'
 
 type Ctx = { params: Promise<{ id: string }> }
 
-// Generates per-product teardown AND costing tasks for existing products that don't have them,
-// and re-syncs costing task owners from each product's current resource assignments.
+// Generates per-product teardown AND costing tasks for existing products that don't have them.
+// Existing task owners are never overwritten: manual assignments must survive page refreshes.
 // Safe to call repeatedly.
 export async function POST(_req: NextRequest, ctx: Ctx) {
   try {
@@ -31,7 +31,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
         },
         workstreams: {
           where: { name: { in: ['Tear Down', 'Costing'] } },
-          include: { tasks: { select: { id: true, name: true, description: true } } },
+          include: { tasks: { select: { id: true, name: true, description: true, ownerId: true } } },
         },
       },
     })
@@ -76,7 +76,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
           const order = await prisma.workstream.count({ where: { projectId: id } })
           const created = await prisma.workstream.create({
             data: { projectId: id, name: 'Tear Down', order },
-            include: { tasks: { select: { id: true, name: true, description: true } } },
+            include: { tasks: { select: { id: true, name: true, description: true, ownerId: true } } },
           })
           tdWs = created
         }
@@ -101,7 +101,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
           const order = await prisma.workstream.count({ where: { projectId: id } })
           const created = await prisma.workstream.create({
             data: { projectId: id, name: 'Costing', order },
-            include: { tasks: { select: { id: true, name: true, description: true } } },
+            include: { tasks: { select: { id: true, name: true, description: true, ownerId: true } } },
           })
           costWs = created
         }
@@ -119,7 +119,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
         })
         const newlyCreated = await prisma.task.findMany({
           where: { workstreamId: costWs.id, description: `__productTask:${product.id}:costing__` },
-          select: { id: true, name: true, description: true },
+          select: { id: true, name: true, description: true, ownerId: true },
         })
         costWs.tasks.push(...newlyCreated.filter((nt) => !costWs!.tasks.some((t) => t.id === nt.id)))
         migrated++
@@ -143,9 +143,10 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
                 return c === baseName || c.includes(baseName) || baseName.includes(c)
               })
             )
+            if (task.ownerId || !match?.userId) return Promise.resolve({ count: 0 })
             return prisma.task.updateMany({
-              where: { id: task.id, NOT: { ownerId: match?.userId ?? null } },
-              data: { ownerId: match?.userId ?? null },
+              where: { id: task.id, ownerId: null },
+              data: { ownerId: match.userId },
             })
           })
         )

@@ -204,7 +204,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
           workstreamId: costingWs.id,
           description: `__productTask:${productId}:costing__`,
         },
-        select: { id: true, name: true },
+        select: { id: true, name: true, ownerId: true },
       })
 
       console.error('[COSTING] existingTasks=%d: %j', costingTasks.length, costingTasks.map((t) => t.name))
@@ -255,7 +255,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
                 workstreamId: costingWs.id,
                 description: `__productTask:${productId}:costing__`,
               },
-              select: { id: true, name: true },
+              select: { id: true, name: true, ownerId: true },
             })
             console.error('[COSTING] afterCreate taskCount=%d', costingTasks.length)
           }
@@ -278,9 +278,13 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
                 return c === baseName || c.includes(baseName) || baseName.includes(c)
               })
             )
-            const ownerId = match?.userId ?? null
-            console.error('[COSTING] task=%s baseName=%s -> ownerId=%s', task.name, baseName, ownerId)
-            return prisma.task.update({ where: { id: task.id }, data: { ownerId } })
+            const ownerId = match?.userId
+            console.error('[COSTING] task=%s baseName=%s -> ownerId=%s', task.name, baseName, ownerId ?? null)
+            if (task.ownerId || !ownerId) return Promise.resolve({ count: 0 })
+            return prisma.task.updateMany({
+              where: { id: task.id, ownerId: null },
+              data: { ownerId },
+            })
           })
         )
       }

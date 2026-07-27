@@ -45,6 +45,7 @@ function countWorkingDays(start: Date, end: Date): number {
 function calcCompletedHours(
   tasks: Array<{
     estimatedHours: number | null
+    effortHours: number
     createdAt: Date
     startDate: Date | null
     endDate: Date | null
@@ -57,7 +58,9 @@ function calcCompletedHours(
   const delayed: Record<string, number> = {}
   for (const task of tasks) {
     if (!task.statusChangedAt) continue
-    const hrs = task.estimatedHours ?? 0
+    // Completion must not free hours already worked on the same day. Keep the
+    // larger of planned work and logged effort, matching active-task handling.
+    const hrs = Math.max(task.estimatedHours ?? 0, task.effortHours ?? 0)
     if (hrs === 0) continue
     // Work window = startDate → statusChangedAt (the actual time span)
     // If no schedule start was supplied, use the actual assignment/creation time.
@@ -250,6 +253,7 @@ export async function GET(req: NextRequest) {
         name: true,
         priority: true,
         estimatedHours: true,
+        effortHours: true,
         createdAt: true,
         startDate: true,
         endDate: true,
