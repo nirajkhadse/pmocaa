@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuthStore, canCreateProject } from '@/store/auth'
@@ -59,6 +59,7 @@ export default function ProjectsPage() {
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | null>('ALL')
   const [typeFilter, setTypeFilter] = useState<string | null>('ALL')
@@ -145,7 +146,7 @@ export default function ProjectsPage() {
 
   const pageTitle = isProjectLead ? 'My Projects' : viewMode === 'mine' ? 'My Projects' : 'All Projects'
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (loadInFlightRef.current) return
     loadInFlightRef.current = true
     try {
@@ -154,28 +155,28 @@ export default function ProjectsPage() {
         cache: 'no-store',
         signal: AbortSignal.timeout(20_000),
       })
+      if (!res.ok) throw new Error('Projects could not be loaded')
       const data = await res.json()
       setProjects(Array.isArray(data) ? data : [])
+      setLoadError(null)
+    } catch {
+      setLoadError('Projects could not be loaded. Please try again.')
     } finally {
       loadInFlightRef.current = false
       setLoading(false)
     }
-  }
+  }, [viewMode])
 
   useEffect(() => {
-    setLoading(true)
-    load()
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') load()
-    }, 30000)
+    const initialLoad = window.setTimeout(load, 0)
     // Refresh immediately when switching back to this tab
     const onVisible = () => { if (document.visibilityState === 'visible') load() }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
-      clearInterval(interval)
+      window.clearTimeout(initialLoad)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [viewMode])
+  }, [load])
 
   const filtered = projects.filter((p) => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase())
@@ -256,7 +257,15 @@ export default function ProjectsPage() {
         </Select>
       </div>
 
-      {loading ? (
+      {loadError && !loading ? (
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <AlertCircle className="h-12 w-12 text-destructive/70 mb-3" />
+          <p className="text-sm font-medium">{loadError}</p>
+          <Button className="mt-4" variant="outline" onClick={() => { setLoading(true); load() }}>
+            Try again
+          </Button>
+        </div>
+      ) : loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-52 rounded-lg" />)}
         </div>

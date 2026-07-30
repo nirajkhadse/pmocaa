@@ -86,9 +86,9 @@ export default function ProjectDetailPage() {
   const { user } = useAuthStore()
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [wizardOpen, setWizardOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('report')
-  const teardownMigratedRef = useRef(false)
   const loadInFlightRef = useRef(false)
 
   // Edit project dialog
@@ -158,9 +158,10 @@ export default function ProjectDetailPage() {
         fetch(`/api/projects/${id}`, requestOptions),
         fetch(`/api/projects/${id}/products`, requestOptions),
       ])
-      if (!projRes.ok) { router.push('/projects'); return }
+      if (!projRes.ok) throw new Error('Project could not be loaded')
       const data = await projRes.json()
       setProject(data)
+      setLoadError(null)
       const dismissKey = `wizard-dismissed-${id}`
       if (data.workstreams?.length === 0 && !localStorage.getItem(dismissKey)) {
         setWizardOpen(true)
@@ -170,31 +171,22 @@ export default function ProjectDetailPage() {
         if (Array.isArray(prods)) {
           setTimelineProducts(prods)
           if (prods.length > 0) setTimelineProductId((prev) => prev ?? prods[0].id)
-          // One-time migration: generate per-product teardown tasks for existing products
-          if (prods.length > 0 && !teardownMigratedRef.current) {
-            teardownMigratedRef.current = true
-            fetch(`/api/projects/${id}/sync-product-teardown`, { method: 'POST' })
-              .then((r) => r.ok ? r.json() : null)
-              .then((result) => { if (result?.migrated > 0) load() })
-              .catch(() => {})
-          }
         }
       }
+    } catch {
+      setLoadError('This project could not be loaded. Please try again.')
     } finally {
       loadInFlightRef.current = false
       setLoading(false)
     }
-  }, [id, router])
+  }, [id])
 
   useEffect(() => {
-    load()
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') load()
-    }, 30000)
+    const initialLoad = window.setTimeout(load, 0)
     const onVisible = () => { if (document.visibilityState === 'visible') load() }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
-      clearInterval(interval)
+      window.clearTimeout(initialLoad)
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [load])
@@ -208,7 +200,25 @@ export default function ProjectDetailPage() {
     )
   }
 
-  if (!project) return null
+  if (!project) {
+    return (
+      <div className="p-6">
+        <Card className="max-w-xl">
+          <CardContent className="p-6 text-center">
+            <AlertTriangle className="h-10 w-10 text-destructive/70 mx-auto mb-3" />
+            <p className="font-medium">{loadError ?? 'This project could not be loaded.'}</p>
+            <div className="mt-4 flex justify-center gap-2">
+              <Button variant="outline" onClick={() => router.push('/projects')}>
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to projects
+              </Button>
+              <Button onClick={() => { setLoading(true); load() }}>Try again</Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   const allTasks = project.workstreams.flatMap((ws) => ws.tasks)
   const progress = allTasks.length
