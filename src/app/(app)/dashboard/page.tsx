@@ -22,6 +22,7 @@ import {
   Eye,
 } from 'lucide-react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { format, isPast } from 'date-fns'
 import { motion, type Variants } from 'framer-motion'
 
@@ -553,6 +554,29 @@ export default function DashboardPage() {
             </motion.div>
           )}
         </div>
+      </motion.div>
+
+      <motion.div variants={item} initial="hidden" animate="show">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-semibold">2026 CAA Project Plan</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto rounded-lg border bg-white">
+              <Image
+                src="/caa-project-plan-2026.png"
+                alt="CAA revised 2026 annual project plan organized by quarter"
+                width={1200}
+                height={667}
+                unoptimized
+                className="h-auto w-full min-w-[900px]"
+              />
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground sm:hidden">
+              Scroll horizontally to view the full project plan.
+            </p>
+          </CardContent>
+        </Card>
       </motion.div>
     </motion.div>
   )

@@ -130,7 +130,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
             type:      'APPROVAL_REQUIRED' as const,
             title:     'Strategic Request Resubmitted',
             message:   `${session.name} resubmitted their strategic request: "${existing.title}"`,
-            actionUrl: '/approvals',
+            actionUrl: '/approvals#strategic',
           })),
         })
       }

@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
             type:      'APPROVAL_REQUIRED' as const,
             title:     'Strategic Request Pending Approval',
             message:   `${session.name} submitted a strategic request: "${sr.title}"`,
-            actionUrl: '/approvals',
+            actionUrl: '/approvals#strategic',
           })),
         })
       }

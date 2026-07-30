@@ -163,7 +163,19 @@ export default function ApprovalsPage() {
 
   useEffect(() => { loadChanges() }, [scFilter])
   useEffect(() => { loadRequests() }, [wFilter])
-  useEffect(() => { if (tab === 'strategic') loadStrategicRequests() }, [tab])
+  // Always load strategic requests on mount so the badge count is correct
+  // and re-load whenever the strategic tab is selected
+  useEffect(() => { if (canApprove) loadStrategicRequests() }, [canApprove])
+  useEffect(() => { if (tab === 'strategic' && canApprove) loadStrategicRequests() }, [tab])
+
+  // Auto-switch tab based on URL hash (e.g. /approvals#strategic from notification link)
+  useEffect(() => {
+    const hash = window.location.hash.replace('#', '')
+    if (hash === 'strategic' || hash === 'schedule' || hash === 'requests') {
+      setTab(hash as 'requests' | 'strategic' | 'schedule')
+    }
+  }, [])
+
 
   // Load team members for assignee dropdowns
   useEffect(() => {
