@@ -183,12 +183,7 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     const initialLoad = window.setTimeout(load, 0)
-    const onVisible = () => { if (document.visibilityState === 'visible') load() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      window.clearTimeout(initialLoad)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
+    return () => window.clearTimeout(initialLoad)
   }, [load])
 
   if (loading) {

@@ -169,13 +169,7 @@ export default function ProjectsPage() {
 
   useEffect(() => {
     const initialLoad = window.setTimeout(load, 0)
-    // Refresh immediately when switching back to this tab
-    const onVisible = () => { if (document.visibilityState === 'visible') load() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      window.clearTimeout(initialLoad)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
+    return () => window.clearTimeout(initialLoad)
   }, [load])
 
   const filtered = projects.filter((p) => {
