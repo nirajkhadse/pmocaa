@@ -39,10 +39,6 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: 'Title and start date are required' }, { status: 400 })
     }
 
-    // ADMIN / MANAGER / PLANNER self-approve; PROJECT_LEAD requests go to PENDING_APPROVAL
-    const isApprover = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role)
-    const status = isApprover ? 'ACTIVE' : 'PENDING_APPROVAL'
-
     const sr = await prisma.strategicRequest.create({
       data: {
         title:       data.title,
@@ -51,12 +47,9 @@ export async function POST(req: NextRequest) {
         endDate:     data.endDate ? new Date(data.endDate) : null,
         submitterId: session.id,
         fileLinks:   Array.isArray(data.fileLinks) ? data.fileLinks : [],
-        status,
-        // Self-approve
-        ...(isApprover && {
-          approvedById: session.id,
-          approvedAt:   new Date(),
-        }),
+        // Strategic requests follow the same approval flow as normal requests,
+        // regardless of the submitter's role.
+        status:       'PENDING_APPROVAL',
       },
       include: {
         submitter: { select: { id: true, name: true } },
@@ -65,24 +58,26 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    // Notify all active ADMIN / MANAGER / PLANNER users when approval is needed
-    if (!isApprover) {
-      const approvers = await prisma.user.findMany({
-        where: { role: { in: ['ADMIN', 'MANAGER', 'PLANNER'] }, isActive: true },
-        select: { id: true },
+    // Notify the other active approvers, matching the normal request flow.
+    const approvers = await prisma.user.findMany({
+      where: {
+        role: { in: ['ADMIN', 'MANAGER', 'PLANNER'] },
+        isActive: true,
+        NOT: { id: session.id },
+      },
+      select: { id: true },
+    })
+    if (approvers.length > 0) {
+      await prisma.notification.createMany({
+        data: approvers.map((a) => ({
+          userId:    a.id,
+          senderId:  session.id,
+          type:      'APPROVAL_REQUIRED' as const,
+          title:     'Strategic Request Pending Approval',
+          message:   `${session.name} submitted a strategic request: "${sr.title}"`,
+          actionUrl: '/approvals#strategic',
+        })),
       })
-      if (approvers.length > 0) {
-        await prisma.notification.createMany({
-          data: approvers.map((a) => ({
-            userId:    a.id,
-            senderId:  session.id,
-            type:      'APPROVAL_REQUIRED' as const,
-            title:     'Strategic Request Pending Approval',
-            message:   `${session.name} submitted a strategic request: "${sr.title}"`,
-            actionUrl: '/approvals#strategic',
-          })),
-        })
-      }
     }
 
     return Response.json(sr, { status: 201 })
