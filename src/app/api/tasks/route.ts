@@ -33,22 +33,31 @@ export async function GET(req: NextRequest) {
     } else if (!scopeAll) {
       // Role-based access: determines which tasks a user may see at all
       if (session.role === 'RESOURCE') {
-        // Only tasks explicitly assigned to this user
-        conditions.push({ ownerId: session.id })
+        // Tasks assigned to this user, plus work they assigned to someone else.
+        // The latter must remain visible when the owner submits it for review so
+        // the assigner can approve it or send it back for rework.
+        conditions.push({
+          OR: [
+            { ownerId: session.id },
+            { assignedById: session.id },
+          ],
+        })
       } else if (session.role === 'PROJECT_LEAD') {
-        // Tasks in their projects OR directly assigned to them
+        // Tasks in their projects, assigned to them, or assigned by them
         conditions.push({
           OR: [
             { workstream: { project: { leadId: session.id } } },
             { ownerId: session.id },
+            { assignedById: session.id },
           ],
         })
       } else if (session.role === 'WORKSTREAM_LEAD') {
-        // Tasks in their workstreams, or directly assigned to them
+        // Tasks in their workstreams, assigned to them, or assigned by them
         conditions.push({
           OR: [
             { workstream: { leadId: session.id } },
             { ownerId: session.id },
+            { assignedById: session.id },
           ],
         })
       }
