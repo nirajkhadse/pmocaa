@@ -224,7 +224,10 @@ export default function KanbanPage() {
 
   const filteredTasks = tasks.filter((t) => {
     if (projectFilter && projectFilter !== 'ALL' && t.workstream.project.id !== projectFilter) return false
-    if (ownerFilter === 'ME' && t.owner?.id !== user?.id) return false
+    // "My Tasks" includes work owned by the user and work they assigned.
+    // Assigned work must stay visible when its owner submits it for review so
+    // the assigner can approve it or request rework.
+    if (ownerFilter === 'ME' && t.owner?.id !== user?.id && t.assignedById !== user?.id) return false
     if (ownerFilter === 'UNASSIGNED' && t.owner) return false
     if (ownerFilter && !['ALL', 'ME', 'UNASSIGNED'].includes(ownerFilter) && t.owner?.id !== ownerFilter) return false
     return true
