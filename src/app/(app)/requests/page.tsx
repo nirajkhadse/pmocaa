@@ -25,6 +25,37 @@ import { z } from 'zod'
 
 interface User { id: string; name: string; role: string }
 
+interface CapacityTask {
+  id: string
+  name: string
+  description?: string | null
+  status: string
+  priority: string
+  estimatedHours: number
+  effortHours?: number
+  startDate: string | null
+  endDate: string | null
+  assignedBy?: { id: string; name: string } | null
+  workstream: { name: string; project: { name: string } }
+}
+
+interface CapacityDay {
+  date: string
+  existingHours: number
+  proposedHours: number
+  capacityHours: number
+  tasks: Array<CapacityTask & { hoursOnDay: number }>
+  otherHours: number
+}
+
+interface CapacityResource {
+  id: string
+  name: string
+  dailyCapacityHours: number
+  dailyHoursMap: Record<string, number>
+  ownedTasks: CapacityTask[]
+}
+
 interface Request {
   id: string; title: string; description: string; priority: string
   type: string; status: string; notes?: string; createdAt: string; updatedAt: string
@@ -159,6 +190,47 @@ const submitSchema = z.object({
 
 type SubmitForm = z.infer<typeof submitSchema>
 
+function dateKeyLocal(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function parseDateOnly(value: string): Date {
+  return new Date(`${value}T00:00:00`)
+}
+
+function workingDateKeys(start: string, end: string): string[] {
+  const keys: string[] = []
+  const current = parseDateOnly(start)
+  const last = parseDateOnly(end)
+  while (current <= last) {
+    if (current.getDay() !== 0 && current.getDay() !== 6) keys.push(dateKeyLocal(current))
+    current.setDate(current.getDate() + 1)
+  }
+  return keys
+}
+
+function currentWorkWeek(): { start: string; end: string } {
+  const today = new Date()
+  const day = today.getDay()
+  const monday = new Date(today)
+  monday.setDate(today.getDate() + (day === 0 ? -6 : 1 - day))
+  const friday = new Date(monday)
+  friday.setDate(monday.getDate() + 4)
+  return { start: dateKeyLocal(monday), end: dateKeyLocal(friday) }
+}
+
+function taskHoursOnDate(task: CapacityTask, date: string, fallbackKeys: string[]): number {
+  const hours = Math.max(task.estimatedHours || 0, task.effortHours || 0)
+  if (hours <= 0) return 0
+  if (!task.startDate || !task.endDate) {
+    return fallbackKeys.includes(date) ? hours / Math.max(1, fallbackKeys.length) : 0
+  }
+  const start = task.startDate.slice(0, 10)
+  const end = task.endDate.slice(0, 10)
+  const taskKeys = workingDateKeys(start, end)
+  return taskKeys.includes(date) ? hours / Math.max(1, taskKeys.length) : 0
+}
+
 function newTaskRow(): SRTaskRow {
   return { _key: Math.random().toString(36).slice(2), title: '', isRecurring: false, hoursPerDay: '', estimatedHours: '', startDate: '', endDate: '', assigneeId: '' }
 }
@@ -189,6 +261,13 @@ export default function RequestsPage() {
   const [formUsers,      setFormUsers]      = useState<User[]>([])
   const [reqFileLinks,   setReqFileLinks]   = useState<string[]>([])
   const [reqFileLinkInput, setReqFileLinkInput] = useState('')
+  const [capacityOpen,   setCapacityOpen]   = useState(false)
+  const [capacityChecking, setCapacityChecking] = useState(false)
+  const [capacityDays,   setCapacityDays]   = useState<CapacityDay[]>([])
+  const [capacityPerson, setCapacityPerson] = useState('')
+  const [pendingRequest, setPendingRequest] = useState<SubmitForm | null>(null)
+  const [timelineEdits,  setTimelineEdits]  = useState<Record<string, { startDate: string; endDate: string }>>({})
+  const [timelineSaving, setTimelineSaving] = useState<string | null>(null)
 
   // Leave state
   const [leaves,         setLeaves]         = useState<Leave[]>([])
@@ -434,8 +513,53 @@ export default function RequestsPage() {
     fetch('/api/users').then((r) => r.json()).then((d) => setFormUsers(Array.isArray(d) ? d : [])).catch(() => {})
   }
 
-  async function onSubmitRequest(data: SubmitForm) {
-    if (!reqHours || parseFloat(reqHours) <= 0) { toast.error('Duration (hours) is required'); return }
+  async function getCapacityConflicts(): Promise<{ person: string; days: CapacityDay[] }> {
+    const targetId = assigneeId || user?.id
+    if (!targetId) return { person: '', days: [] }
+
+    const fallback = currentWorkWeek()
+    const rangeStart = reqStartDate || reqEndDate || fallback.start
+    const rangeEnd = reqEndDate || reqStartDate || fallback.end
+    if (parseDateOnly(rangeEnd) < parseDateOnly(rangeStart)) {
+      throw new Error('End date must be on or after the start date')
+    }
+
+    const keys = workingDateKeys(rangeStart, rangeEnd)
+    if (keys.length === 0) return { person: '', days: [] }
+
+    const res = await fetch(`/api/resources?from=${rangeStart}&to=${rangeEnd}`, { cache: 'no-store' })
+    if (!res.ok) throw new Error('Could not check assignee capacity')
+    const resources = await res.json()
+    const resource = Array.isArray(resources)
+      ? (resources as CapacityResource[]).find((item) => item.id === targetId)
+      : undefined
+    if (!resource) return { person: '', days: [] }
+
+    const requestedHours = parseFloat(reqHours)
+    const proposedPerDay = isRecurring ? requestedHours : requestedHours / Math.max(1, keys.length)
+    const days = keys.flatMap((date): CapacityDay[] => {
+      const existingHours = resource.dailyHoursMap[date] ?? 0
+      const capacityHours = resource.dailyCapacityHours || 8
+      const projectedHours = existingHours + proposedPerDay
+      if (existingHours < capacityHours && projectedHours <= capacityHours) return []
+
+      const tasks = resource.ownedTasks
+        .map((task) => ({ ...task, hoursOnDay: taskHoursOnDate(task, date, keys) }))
+        .filter((task) => task.hoursOnDay > 0)
+      const listedHours = tasks.reduce((sum, task) => sum + task.hoursOnDay, 0)
+      return [{
+        date,
+        existingHours,
+        proposedHours: proposedPerDay,
+        capacityHours,
+        tasks,
+        otherHours: Math.max(0, existingHours - listedHours),
+      }]
+    })
+    return { person: resource.name, days }
+  }
+
+  async function submitRequest(data: SubmitForm) {
     setSubmitting(true)
     try {
       const res = await fetch('/api/requests', {
@@ -461,6 +585,60 @@ export default function RequestsPage() {
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to submit')
     } finally { setSubmitting(false) }
+  }
+
+  async function onSubmitRequest(data: SubmitForm) {
+    if (!reqHours || parseFloat(reqHours) <= 0) { toast.error('Duration (hours) is required'); return }
+    setCapacityChecking(true)
+    try {
+      const conflicts = await getCapacityConflicts()
+      if (conflicts.days.length > 0) {
+        setPendingRequest(data)
+        setCapacityPerson(conflicts.person)
+        setCapacityDays(conflicts.days)
+        setTimelineEdits(Object.fromEntries(
+          conflicts.days.flatMap((day) => day.tasks).map((task) => [task.id, {
+            startDate: task.startDate?.slice(0, 10) ?? '',
+            endDate: task.endDate?.slice(0, 10) ?? '',
+          }])
+        ))
+        setCapacityOpen(true)
+        return
+      }
+      await submitRequest(data)
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Could not check capacity')
+    } finally {
+      setCapacityChecking(false)
+    }
+  }
+
+  async function saveTimeline(task: CapacityTask) {
+    const edit = timelineEdits[task.id]
+    if (!edit?.startDate || !edit?.endDate) {
+      toast.error('Select both start and end dates')
+      return
+    }
+    if (parseDateOnly(edit.endDate) < parseDateOnly(edit.startDate)) {
+      toast.error('Task end date must be on or after its start date')
+      return
+    }
+    setTimelineSaving(task.id)
+    try {
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(edit),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Failed to update timeline')
+      const refreshed = await getCapacityConflicts()
+      setCapacityDays(refreshed.days)
+      toast.success('Task timeline updated')
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update timeline')
+    } finally {
+      setTimelineSaving(null)
+    }
   }
 
   async function updateStatus(id: string, status: string) {
@@ -1720,13 +1898,118 @@ export default function RequestsPage() {
             </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={submitting}>Submit Request</Button>
+              <Button type="submit" disabled={submitting || capacityChecking}>
+                {capacityChecking ? 'Checking capacity...' : 'Submit Request'}
+              </Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
 
       {/* ── Edit Request Dialog ── */}
+      <Dialog open={capacityOpen} onOpenChange={setCapacityOpen} disablePointerDismissal>
+        <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Capacity reminder for {capacityPerson}
+            </DialogTitle>
+          </DialogHeader>
+          {capacityDays.length === 0 ? (
+            <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800 dark:border-green-900 dark:bg-green-950/30 dark:text-green-300">
+              The selected dates now have available capacity.
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">
+                The new request can still be submitted. Review existing work and optionally adjust timelines first.
+              </p>
+              <div className="space-y-4">
+                {capacityDays.map((day) => (
+                  <div key={day.date} className="rounded-lg border border-amber-200 dark:border-amber-900 overflow-hidden">
+                    <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-50 dark:bg-amber-950/30 px-4 py-3">
+                      <div>
+                        <p className="font-semibold">{format(parseDateOnly(day.date), 'EEEE, MMM d, yyyy')}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Existing {day.existingHours.toFixed(1)}h + new {day.proposedHours.toFixed(1)}h
+                        </p>
+                      </div>
+                      <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-900 dark:text-amber-200">
+                        {(day.existingHours + day.proposedHours).toFixed(1)}h / {day.capacityHours.toFixed(1)}h
+                      </Badge>
+                    </div>
+                    <div className="divide-y">
+                      {day.tasks.length === 0 && day.otherHours <= 0 && (
+                        <p className="px-4 py-3 text-sm text-muted-foreground">No task details are available for this load.</p>
+                      )}
+                      {day.tasks.map((task) => {
+                        const edit = timelineEdits[task.id] ?? { startDate: '', endDate: '' }
+                        const canReschedule = !!user && (
+                          ['ADMIN', 'MANAGER', 'PLANNER'].includes(user.role) || task.assignedBy?.id === user.id
+                        )
+                        return (
+                          <div key={`${day.date}-${task.id}`} className="px-4 py-3 space-y-2">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium">{task.name}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {task.workstream.project.name === '__direct_assignments__' ? 'Direct Assignment' : task.workstream.project.name}
+                                  {' · '}{TASK_STATUS_LABELS[task.status] ?? task.status}
+                                  {' · '}{task.hoursOnDay.toFixed(1)}h on this day
+                                </p>
+                                {task.description && <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{task.description}</p>}
+                              </div>
+                              <Badge className={TASK_STATUS_COLORS[task.status] ?? 'bg-muted text-foreground'}>{task.priority}</Badge>
+                            </div>
+                            {canReschedule ? (
+                              <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
+                                <div className="space-y-1">
+                                  <Label className="text-xs">New start</Label>
+                                  <Input type="date" value={edit.startDate} onChange={(e) => setTimelineEdits((previous) => ({
+                                    ...previous, [task.id]: { ...edit, startDate: e.target.value },
+                                  }))} />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">New end</Label>
+                                  <Input type="date" value={edit.endDate} onChange={(e) => setTimelineEdits((previous) => ({
+                                    ...previous, [task.id]: { ...edit, endDate: e.target.value },
+                                  }))} />
+                                </div>
+                                <Button type="button" variant="outline" onClick={() => saveTimeline(task)} disabled={timelineSaving === task.id}>
+                                  {timelineSaving === task.id ? 'Saving...' : 'Update'}
+                                </Button>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">Timeline is read-only because this task was assigned by someone else.</p>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {day.otherHours > 0.05 && (
+                        <div className="px-4 py-3 text-xs text-muted-foreground">
+                          Other commitments (meetings, strategic work, or pending approvals): {day.otherHours.toFixed(1)}h
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          <div className="flex flex-wrap justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setCapacityOpen(false)}>Back to request</Button>
+            <Button type="button" disabled={submitting} onClick={async () => {
+              if (!pendingRequest) return
+              setCapacityOpen(false)
+              await submitRequest(pendingRequest)
+              setPendingRequest(null)
+            }}>
+              {submitting ? 'Submitting...' : 'Submit anyway'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!editReqId} onOpenChange={(o) => { if (!o) setEditReqId(null) }}>
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Edit Request</DialogTitle></DialogHeader>

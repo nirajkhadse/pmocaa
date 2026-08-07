@@ -90,7 +90,13 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/tasks/[id]
       if (session.role === 'WORKSTREAM_LEAD') isWorkstreamLead = ws?.leadId === session.id
     }
     const canAssign = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) || isProjectLeadInDraft || isWorkstreamLead
-    const canEditDates = ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) || isProjectLeadWithAccess || isWorkstreamLead
+    // The original assigner may adjust the schedule of work they delegated.
+    // This supports the capacity reminder shown while creating another request.
+    const canEditDates =
+      ['ADMIN', 'MANAGER', 'PLANNER'].includes(session.role) ||
+      isProjectLeadWithAccess ||
+      isWorkstreamLead ||
+      existing.assignedById === session.id
     // Actual dates: the task owner recording their own real progress, or anyone who can edit
     // the original schedule. Previously open to any authenticated user — tightened here.
     const canEditActualDates = canEditDates || existing.ownerId === session.id
