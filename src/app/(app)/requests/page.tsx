@@ -1961,6 +1961,18 @@ export default function RequestsPage() {
                               </div>
                               <Badge className={TASK_STATUS_COLORS[task.status] ?? 'bg-muted text-foreground'}>{task.priority}</Badge>
                             </div>
+                            <div className="rounded-md bg-muted/50 px-3 py-2 text-xs">
+                              <span className="font-medium text-foreground">Current timeline: </span>
+                              <span className="text-muted-foreground">
+                                {task.startDate
+                                  ? format(parseDateOnly(task.startDate.slice(0, 10)), 'MMM d, yyyy')
+                                  : 'Start not set'}
+                                {' – '}
+                                {task.endDate
+                                  ? format(parseDateOnly(task.endDate.slice(0, 10)), 'MMM d, yyyy')
+                                  : 'End not set'}
+                              </span>
+                            </div>
                             {canReschedule ? (
                               <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
                                 <div className="space-y-1">
