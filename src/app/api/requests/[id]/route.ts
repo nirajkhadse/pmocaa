@@ -59,10 +59,11 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/requests/[
         : existing.assigneeId
       const assigneeChanging = data.assigneeId !== undefined && data.assigneeId !== existing.assigneeId
 
-      // Detect whether anything OTHER than assignee/assignedBy is changing
+      // Schedule-only changes do not invalidate an earlier approval. They update the
+      // live task in place so Kanban, Gantt, and resource capacity stay in sync.
+      const scheduleChanging = data.startDate !== undefined || data.endDate !== undefined
       const substantiveChange = data.title !== undefined || data.description !== undefined ||
         data.priority !== undefined || data.type !== undefined ||
-        data.startDate !== undefined || data.endDate !== undefined ||
         data.isRecurring !== undefined || data.hoursPerDay !== undefined ||
         data.estimatedHours !== undefined
 
@@ -140,6 +141,44 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<'/api/requests/[
           })
         }
         // Signal other tabs to refresh (so Gantt/Kanban/Resources update immediately)
+      }
+
+      if (scheduleChanging && existing.status === 'APPROVED' && !substantiveChange) {
+        const directWs = await prisma.workstream.findFirst({
+          where: { project: { name: '__direct_assignments__' } },
+          select: { id: true },
+        })
+        if (directWs) {
+          await prisma.task.updateMany({
+            where: {
+              workstreamId: directWs.id,
+              ownerId: newAssigneeId,
+              name: existing.title,
+              status: { notIn: ['COMPLETED', 'CANCELLED'] },
+            },
+            data: {
+              ...(data.startDate !== undefined && {
+                startDate: data.startDate ? new Date(data.startDate) : null,
+              }),
+              ...(data.endDate !== undefined && {
+                endDate: data.endDate ? new Date(data.endDate) : null,
+              }),
+            },
+          })
+        }
+
+        if (newAssigneeId && newAssigneeId !== session.id) {
+          await prisma.notification.create({
+            data: {
+              userId: newAssigneeId,
+              senderId: session.id,
+              type: 'TASK_UPDATED',
+              title: 'Task Timeline Updated',
+              message: `${existing.submitter.name} updated the timeline for "${existing.title}". The task remains approved.`,
+              actionUrl: '/gantt',
+            },
+          })
+        }
       }
 
       const updated = await prisma.request.update({
