@@ -40,6 +40,7 @@ interface CapacityTask {
 }
 
 interface CapacityDay {
+  person: string
   date: string
   existingHours: number
   proposedHours: number
@@ -253,7 +254,7 @@ export default function RequestsPage() {
 
   // New request form extra state
   const [assignedById,   setAssignedById]   = useState('')
-  const [assigneeId,     setAssigneeId]     = useState('')
+  const [assigneeIds,    setAssigneeIds]    = useState<string[]>([])
   const [isRecurring,    setIsRecurring]    = useState(false)
   const [reqStartDate,   setReqStartDate]   = useState('')
   const [reqEndDate,     setReqEndDate]     = useState('')
@@ -502,7 +503,7 @@ export default function RequestsPage() {
   function openNewRequest() {
     sForm.reset({ type: 'TEARDOWN', priority: 'MEDIUM' })
     setAssignedById('')
-    setAssigneeId(user?.id || '')
+    setAssigneeIds(user?.id ? [user.id] : [])
     setIsRecurring(false)
     setReqStartDate('')
     setReqEndDate('')
@@ -514,8 +515,8 @@ export default function RequestsPage() {
   }
 
   async function getCapacityConflicts(): Promise<{ person: string; days: CapacityDay[] }> {
-    const targetId = assigneeId || user?.id
-    if (!targetId) return { person: '', days: [] }
+    const targetIds = assigneeIds.length > 0 ? assigneeIds : (user?.id ? [user.id] : [])
+    if (targetIds.length === 0) return { person: '', days: [] }
 
     const fallback = currentWorkWeek()
     const rangeStart = reqStartDate || reqEndDate || fallback.start
@@ -530,33 +531,25 @@ export default function RequestsPage() {
     const res = await fetch(`/api/resources?from=${rangeStart}&to=${rangeEnd}`, { cache: 'no-store' })
     if (!res.ok) throw new Error('Could not check assignee capacity')
     const resources = await res.json()
-    const resource = Array.isArray(resources)
-      ? (resources as CapacityResource[]).find((item) => item.id === targetId)
-      : undefined
-    if (!resource) return { person: '', days: [] }
-
     const requestedHours = parseFloat(reqHours)
-    const proposedPerDay = isRecurring ? requestedHours : requestedHours / Math.max(1, keys.length)
-    const days = keys.flatMap((date): CapacityDay[] => {
-      const existingHours = resource.dailyHoursMap[date] ?? 0
-      const capacityHours = resource.dailyCapacityHours || 8
-      const projectedHours = existingHours + proposedPerDay
-      if (existingHours < capacityHours && projectedHours <= capacityHours) return []
-
-      const tasks = resource.ownedTasks
-        .map((task) => ({ ...task, hoursOnDay: taskHoursOnDate(task, date, keys) }))
-        .filter((task) => task.hoursOnDay > 0)
-      const listedHours = tasks.reduce((sum, task) => sum + task.hoursOnDay, 0)
-      return [{
-        date,
-        existingHours,
-        proposedHours: proposedPerDay,
-        capacityHours,
-        tasks,
-        otherHours: Math.max(0, existingHours - listedHours),
-      }]
+    const hoursPerPerson = requestedHours / targetIds.length
+    const selectedResources = Array.isArray(resources)
+      ? (resources as CapacityResource[]).filter((item) => targetIds.includes(item.id))
+      : []
+    const days = selectedResources.flatMap((resource) => {
+      const proposedPerDay = isRecurring ? hoursPerPerson : hoursPerPerson / Math.max(1, keys.length)
+      return keys.flatMap((date): CapacityDay[] => {
+        const existingHours = resource.dailyHoursMap[date] ?? 0
+        const capacityHours = resource.dailyCapacityHours || 8
+        if (existingHours < capacityHours && existingHours + proposedPerDay <= capacityHours) return []
+        const tasks = resource.ownedTasks
+          .map((task) => ({ ...task, hoursOnDay: taskHoursOnDate(task, date, keys) }))
+          .filter((task) => task.hoursOnDay > 0)
+        const listedHours = tasks.reduce((sum, task) => sum + task.hoursOnDay, 0)
+        return [{ person: resource.name, date, existingHours, proposedHours: proposedPerDay, capacityHours, tasks, otherHours: Math.max(0, existingHours - listedHours) }]
+      })
     })
-    return { person: resource.name, days }
+    return { person: selectedResources.map((resource) => resource.name).join(', '), days }
   }
 
   async function submitRequest(data: SubmitForm) {
@@ -568,7 +561,7 @@ export default function RequestsPage() {
         body: JSON.stringify({
           ...data,
           assignedById: assignedById || undefined,
-          assigneeId: assigneeId || user?.id || undefined,
+          assigneeIds: assigneeIds.length > 0 ? assigneeIds : (user?.id ? [user.id] : undefined),
           isRecurring,
           startDate: reqStartDate || undefined,
           endDate: reqEndDate || undefined,
@@ -1785,9 +1778,9 @@ export default function RequestsPage() {
 
             {user?.role !== 'RESOURCE' && (
               <div className="space-y-1.5">
-                <Label>Assign to (who will do the work)</Label>
-                <Select value={assigneeId || user?.id || ''} onValueChange={(v) => setAssigneeId(v ?? '')}>
-                  <SelectTrigger className="w-full"><SelectValue placeholder="Select assignee" /></SelectTrigger>
+                <Label>Assign to <span className="font-normal text-muted-foreground">(select one or more)</span></Label>
+                <Select value="" onValueChange={(v) => { const id = v as string | null; if (id) setAssigneeIds(previous => previous.includes(id) ? previous : [...previous, id]) }}>
+                  <SelectTrigger className="w-full"><SelectValue placeholder="Add an assignee" /></SelectTrigger>
                   <SelectContent>
                     {user?.id && <SelectItem value={user.id}>Me ({user.name})</SelectItem>}
                     {formUsers.filter(u => u.id !== user?.id).map((u) => (
@@ -1797,6 +1790,25 @@ export default function RequestsPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                {assigneeIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {assigneeIds.map(id => {
+                      const person = id === user?.id ? user : formUsers.find(candidate => candidate.id === id)
+                      if (!person) return null
+                      return (
+                        <button key={id} type="button" onClick={() => setAssigneeIds(previous => previous.filter(candidate => candidate !== id))}
+                          className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+                          {person.name} <span aria-hidden>×</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {reqHours && assigneeIds.length > 1 && (
+                  <p className="text-xs text-muted-foreground">
+                    {reqHours}h total ÷ {assigneeIds.length} people = {(parseFloat(reqHours) / assigneeIds.length).toFixed(2)}h each
+                  </p>
+                )}
               </div>
             )}
 
@@ -1915,10 +1927,10 @@ export default function RequestsPage() {
               </p>
               <div className="space-y-4">
                 {capacityDays.map((day) => (
-                  <div key={day.date} className="rounded-lg border border-amber-200 dark:border-amber-900 overflow-hidden">
+                  <div key={`${day.person}-${day.date}`} className="rounded-lg border border-amber-200 dark:border-amber-900 overflow-hidden">
                     <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-50 dark:bg-amber-950/30 px-4 py-3">
                       <div>
-                        <p className="font-semibold">{format(parseDateOnly(day.date), 'EEEE, MMM d, yyyy')}</p>
+                        <p className="font-semibold">{day.person} · {format(parseDateOnly(day.date), 'EEEE, MMM d, yyyy')}</p>
                         <p className="text-xs text-muted-foreground">
                           Existing {day.existingHours.toFixed(1)}h + new {day.proposedHours.toFixed(1)}h
                         </p>

@@ -38,31 +38,37 @@ export async function POST(req: NextRequest) {
     const data = await req.json()
 
     // RESOURCE can only submit requests for themselves — ignore any passed assigneeId
-    const effectiveAssigneeId = session.role === 'RESOURCE'
-      ? session.id
-      : (data.assigneeId || null)
+    const requestedAssigneeIds: string[] = Array.isArray(data.assigneeIds)
+      ? data.assigneeIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
+      : (data.assigneeId ? [data.assigneeId] : [])
+    const effectiveAssigneeIds = session.role === 'RESOURCE'
+      ? [session.id]
+      : Array.from(new Set(requestedAssigneeIds.length > 0 ? requestedAssigneeIds : [session.id]))
+    const assigneeCount = effectiveAssigneeIds.length
+    const totalHours = data.estimatedHours ? parseFloat(String(data.estimatedHours)) : null
+    const totalHoursPerDay = data.hoursPerDay ? parseFloat(String(data.hoursPerDay)) : null
 
-    const request = await prisma.request.create({
-      data: {
-        title: data.title,
-        description: data.description,
-        priority: data.priority || 'MEDIUM',
-        type: data.type,
-        submitterId: session.id,
-        assigneeId: effectiveAssigneeId,
-        notes: data.notes,
-        startDate:    data.startDate   ? new Date(data.startDate)   : null,
-        endDate:      data.endDate     ? new Date(data.endDate)     : null,
-        isRecurring:  data.isRecurring ?? false,
-        hoursPerDay:  data.isRecurring && data.hoursPerDay ? parseFloat(String(data.hoursPerDay)) : null,
-        estimatedHours: !data.isRecurring && data.estimatedHours ? parseFloat(String(data.estimatedHours)) : null,
-        assignedById: data.assignedById || null,
-        fileLinks: Array.isArray(data.fileLinks) ? data.fileLinks : [],
-      },
-      include: {
-        submitter: { select: { id: true, name: true } },
-      },
-    })
+    const requests = await prisma.$transaction(effectiveAssigneeIds.map((assigneeId) =>
+      prisma.request.create({
+        data: {
+          title: data.title,
+          description: data.description,
+          priority: data.priority || 'MEDIUM',
+          type: data.type,
+          submitterId: session.id,
+          assigneeId,
+          notes: data.notes,
+          startDate: data.startDate ? new Date(data.startDate) : null,
+          endDate: data.endDate ? new Date(data.endDate) : null,
+          isRecurring: data.isRecurring ?? false,
+          hoursPerDay: data.isRecurring && totalHoursPerDay !== null ? totalHoursPerDay / assigneeCount : null,
+          estimatedHours: !data.isRecurring && totalHours !== null ? totalHours / assigneeCount : null,
+          assignedById: data.assignedById || null,
+          fileLinks: Array.isArray(data.fileLinks) ? data.fileLinks : [],
+        },
+        include: { submitter: { select: { id: true, name: true } } },
+      })
+    ))
 
     // Notify all active ADMIN / MANAGER / PLANNER users
     const managers = await prisma.user.findMany({
@@ -81,13 +87,13 @@ export async function POST(req: NextRequest) {
           senderId: session.id,
           type: 'APPROVAL_REQUIRED' as const,
           title: 'New Request Submitted',
-          message: `${session.name} submitted a new request: "${request.title}"`,
+          message: `${session.name} submitted a new request: "${data.title}"`,
           actionUrl: '/requests',
         })),
       })
     }
 
-    return Response.json(request, { status: 201 })
+    return Response.json(requests.length === 1 ? requests[0] : requests, { status: 201 })
   } catch (err: unknown) {
     if (err instanceof Error && err.message === 'Unauthorized') {
       return Response.json({ error: 'Unauthorized' }, { status: 401 })
