@@ -5,6 +5,10 @@ import { requireAuth } from '@/lib/auth'
 export const HOURS_PER_DAY = 8   // daily limit per person (at 100% capacity)
 export const HOURS_PER_WEEK = 40  // weekly limit per person (at 100% capacity)
 
+function toLocalDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 function parseMeetingHours(startTime: string, endTime: string): number {
   const [sh, sm] = startTime.split(':').map(Number)
   const [eh, em] = endTime.split(':').map(Number)
@@ -78,7 +82,7 @@ function calcCompletedHours(
     while (curr <= overlapEnd) {
       const dow = curr.getDay()
       if (dow !== 0 && dow !== 6) {
-        const key = curr.toISOString().slice(0, 10)
+        const key = toLocalDateKey(curr)
         // Day is "delayed" if it falls after the original planned endDate
         if (task.endDate && curr > task.endDate) {
           delayed[key] = (delayed[key] ?? 0) + hpd
@@ -108,7 +112,7 @@ export function calcDailyHours(
   while (populateDay <= populateEnd) {
     const dow = populateDay.getDay()
     if (dow !== 0 && dow !== 6) {
-      daily[populateDay.toISOString().slice(0, 10)] = 0
+      daily[toLocalDateKey(populateDay)] = 0
     }
     populateDay.setDate(populateDay.getDate() + 1)
   }
@@ -141,7 +145,7 @@ export function calcDailyHours(
     while (curr <= overlapEnd) {
       const dow = curr.getDay()
       if (dow !== 0 && dow !== 6) {
-        const key = curr.toISOString().slice(0, 10)
+        const key = toLocalDateKey(curr)
         if (key in daily) daily[key] += hpd
       }
       curr.setDate(curr.getDate() + 1)
@@ -510,7 +514,7 @@ export async function GET(req: NextRequest) {
         const curr  = new Date(start); curr.setHours(0, 0, 0, 0)
         while (curr <= end) {
           const dow = curr.getDay()
-          if (dow !== 0 && dow !== 6) leaveDates.push(curr.toISOString().slice(0, 10))
+          if (dow !== 0 && dow !== 6) leaveDates.push(toLocalDateKey(curr))
           curr.setDate(curr.getDate() + 1)
         }
       }
