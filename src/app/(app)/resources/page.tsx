@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   AlertTriangle, Users, Briefcase, Clock, Search,
   ClipboardCheck, UserPlus, CalendarDays, Layers, Target,
-  ChevronLeft, ChevronRight, LayoutGrid, BarChart2, Video, Palmtree,
+  LayoutGrid, BarChart2, Video, Palmtree,
 } from 'lucide-react'
 import { AssignWorkDialog } from '@/components/assign-work-dialog'
 
@@ -166,28 +166,25 @@ function cellBg(hours: number, capacity: number) {
 
 function ResourceGanttView() {
   const [mode, setMode] = useState<'daily' | 'weekly'>('weekly')
-  const [offset, setOffset] = useState(0)  // weeks offset for daily; 4-week group offset for weekly
   const [ganttData, setGanttData] = useState<Resource[]>([])
   const [loading, setLoading] = useState(false)
 
   // Compute the Monday of the current week once (stable reference)
   const currentMonday = useMemo(() => getMondayOf(new Date()), [])
+  const defaultFrom = useMemo(() => toDateKey(currentMonday), [currentMonday])
+  const defaultTo = useMemo(() => {
+    const end = new Date(currentMonday)
+    end.setDate(end.getDate() + 27)
+    return toDateKey(end)
+  }, [currentMonday])
+  const [fromDate, setFromDate] = useState(defaultFrom)
+  const [toDate, setToDate] = useState(defaultTo)
 
   const dateRange = useMemo(() => {
-    const from = new Date(currentMonday)
-    if (mode === 'daily') {
-      from.setDate(from.getDate() + offset * 7)
-      const to = new Date(from)
-      to.setDate(to.getDate() + 4) // Mon → Fri
-      return { from, to }
-    } else {
-      // 4-week groups
-      from.setDate(from.getDate() + offset * 28)
-      const to = new Date(from)
-      to.setDate(to.getDate() + 27) // 4 weeks = 28 days, last day is Sun of week 4
-      return { from, to }
-    }
-  }, [currentMonday, mode, offset])
+    const from = new Date(`${fromDate}T00:00:00`)
+    const to = new Date(`${toDate}T23:59:59`)
+    return { from, to }
+  }, [fromDate, toDate])
 
   useEffect(() => {
     const fetchGantt = async () => {
@@ -255,29 +252,29 @@ function ResourceGanttView() {
         <div className="flex rounded-lg border overflow-hidden text-sm">
           <button
             className={`px-3 py-1.5 ${mode === 'daily' ? 'bg-blue-600 text-white' : 'hover:bg-muted'}`}
-            onClick={() => { setMode('daily'); setOffset(0) }}
+            onClick={() => setMode('daily')}
           >Daily</button>
           <button
             className={`px-3 py-1.5 ${mode === 'weekly' ? 'bg-blue-600 text-white' : 'hover:bg-muted'}`}
-            onClick={() => { setMode('weekly'); setOffset(0) }}
-          >Weekly (4 wks)</button>
+            onClick={() => setMode('weekly')}
+          >Weekly</button>
         </div>
 
-        <div className="flex items-center gap-1">
-          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setOffset(o => o - 1)}>
-            <ChevronLeft className="h-4 w-4" />
+        <div className="flex items-end gap-2 flex-wrap">
+          <label className="space-y-1 text-xs text-muted-foreground">
+            <span className="block">From</span>
+            <Input type="date" value={fromDate} max={toDate} onChange={e => { if (e.target.value) setFromDate(e.target.value) }} className="h-8 w-[145px] text-xs" />
+          </label>
+          <label className="space-y-1 text-xs text-muted-foreground">
+            <span className="block">To</span>
+            <Input type="date" value={toDate} min={fromDate} onChange={e => { if (e.target.value) setToDate(e.target.value) }} className="h-8 w-[145px] text-xs" />
+          </label>
+          <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => { setFromDate(defaultFrom); setToDate(defaultTo) }}>
+            Current 4 weeks
           </Button>
-          <span className="text-sm font-medium min-w-[160px] text-center">
+          <span className="pb-2 text-xs font-medium text-muted-foreground">
             {mode === 'daily' ? rangeLabelDaily : rangeLabelWeekly}
           </span>
-          <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setOffset(o => o + 1)}>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          {offset !== 0 && (
-            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setOffset(0)}>
-              Today
-            </Button>
-          )}
         </div>
 
         {/* Legend */}

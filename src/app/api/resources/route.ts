@@ -240,13 +240,18 @@ export async function GET(req: NextRequest) {
       orderBy: { name: 'asc' },
     })
 
-    // Completed tasks in the last 60 days — hours spread over actual work window
+    // Completed tasks overlapping the requested range (last 60 days by default).
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
+    const completedRangeStart = fromParam || toParam ? rangeStart : sixtyDaysAgo
     const completedTasksAll = await prisma.task.findMany({
       where: {
         status: 'COMPLETED',
         ownerId: { in: users.map(u => u.id) },
-        statusChangedAt: { gte: sixtyDaysAgo },
+        statusChangedAt: { gte: completedRangeStart },
+        OR: [
+          { startDate: { lte: rangeEnd } },
+          { startDate: null, createdAt: { lte: rangeEnd } },
+        ],
       },
       select: {
         id: true,

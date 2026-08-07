@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
-  Plus, Search, ClipboardList, ArrowRight, CheckCircle2,
+  Plus, Search, ClipboardList, CheckCircle2,
   XCircle, FolderPlus, Clock, AlertTriangle, Calendar, Repeat, Users, RotateCcw,
   Pencil, Trash2, Target, ListPlus, ChevronDown, ChevronRight, Palmtree, RefreshCw, Video,
   Link as LinkIcon, X,
@@ -1190,29 +1190,18 @@ export default function RequestsPage() {
                           {/* Manager action buttons */}
                           {canManage && (req.status === 'SUBMITTED' || req.status === 'REVIEW') && (
                             <div className="flex gap-1.5 flex-wrap justify-end">
-                              {req.status === 'SUBMITTED' && (
-                                <Button size="sm" variant="outline" className="h-7 text-xs"
-                                  disabled={actionLoading === req.id + 'REVIEW'}
-                                  onClick={() => updateStatus(req.id, 'REVIEW')}>
-                                  <ArrowRight className="mr-1 h-3 w-3" /> Start Review
-                                </Button>
-                              )}
-                              {req.status === 'REVIEW' && (
-                                <>
-                                  <Button size="sm" variant="outline"
-                                    className="h-7 text-xs text-green-600 border-green-200 hover:bg-green-50"
-                                    disabled={actionLoading === req.id + 'APPROVED'}
-                                    onClick={() => updateStatus(req.id, 'APPROVED')}>
-                                    <CheckCircle2 className="mr-1 h-3 w-3" /> Approve
-                                  </Button>
-                                  <Button size="sm" variant="outline"
-                                    className="h-7 text-xs text-red-600 border-red-200 hover:bg-red-50"
-                                    disabled={actionLoading === req.id + 'REJECTED'}
-                                    onClick={() => updateStatus(req.id, 'REJECTED')}>
-                                    <XCircle className="mr-1 h-3 w-3" /> Reject
-                                  </Button>
-                                </>
-                              )}
+                              <Button size="sm" variant="outline"
+                                className="h-7 text-xs text-green-600 border-green-200 hover:bg-green-50"
+                                disabled={actionLoading === req.id + 'APPROVED'}
+                                onClick={() => updateStatus(req.id, 'APPROVED')}>
+                                <CheckCircle2 className="mr-1 h-3 w-3" /> Approve
+                              </Button>
+                              <Button size="sm" variant="outline"
+                                className="h-7 text-xs text-red-600 border-red-200 hover:bg-red-50"
+                                disabled={actionLoading === req.id + 'REJECTED'}
+                                onClick={() => updateStatus(req.id, 'REJECTED')}>
+                                <XCircle className="mr-1 h-3 w-3" /> Reject
+                              </Button>
                             </div>
                           )}
                         </div>
