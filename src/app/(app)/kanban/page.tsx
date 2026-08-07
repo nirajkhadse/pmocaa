@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -125,6 +126,7 @@ export default function KanbanPage() {
   const [loading, setLoading] = useState(true)
   const [projectFilter, setProjectFilter] = useState<string | null>('ALL')
   const [ownerFilter, setOwnerFilter] = useState<string | null>(searchParams.get('owner') ?? 'ME')
+  const [completedDateFilter, setCompletedDateFilter] = useState('')
   const [allUsers, setAllUsers] = useState<Array<{ id: string; name: string }>>([])
 
   useEffect(() => {
@@ -234,7 +236,15 @@ export default function KanbanPage() {
   })
 
   const getColumnTasks = (status: string) =>
-    filteredTasks.filter((t) => t.status === status).sort((a, b) => a.order - b.order)
+    filteredTasks
+      .filter((t) => {
+        if (t.status !== status) return false
+        if (status === 'COMPLETED' && completedDateFilter) {
+          return format(new Date(t.statusChangedAt), 'yyyy-MM-dd') === completedDateFilter
+        }
+        return true
+      })
+      .sort((a, b) => a.order - b.order)
 
   async function patchStatus(taskId: string, status: string, extra?: Record<string, unknown>) {
     const res = await fetch(`/api/tasks/${taskId}`, {
@@ -471,7 +481,7 @@ export default function KanbanPage() {
           <h1 className="text-2xl font-bold">Kanban Board</h1>
           <p className="text-muted-foreground text-sm">{filteredTasks.length} tasks</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
           <Select value={projectFilter} onValueChange={setProjectFilter}>
             <SelectTrigger className="w-44 h-8 text-sm">
               <SelectValue placeholder="All Projects" />
@@ -498,6 +508,24 @@ export default function KanbanPage() {
               </SelectContent>
             </Select>
           )}
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="completed-date-filter" className="text-xs text-muted-foreground whitespace-nowrap">
+              Completed on
+            </label>
+            <Input
+              id="completed-date-filter"
+              type="date"
+              value={completedDateFilter}
+              onChange={(e) => setCompletedDateFilter(e.target.value)}
+              className="h-8 w-[145px] text-xs"
+              aria-label="Filter completed tasks by completion date"
+            />
+            {completedDateFilter && (
+              <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setCompletedDateFilter('')}>
+                Clear
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -609,11 +637,18 @@ export default function KanbanPage() {
                                 {task.endDate && (
                                   <div className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
                                     <Calendar className="h-3 w-3" />
-                                    <span>{format(new Date(task.endDate), 'MMM d')}</span>
+                                    <span>Due {format(new Date(task.endDate), 'MMM d')}</span>
                                   </div>
                                 )}
 
                                 {/* Early / late badge — only on completed non-strategic tasks */}
+                                {task.status === 'COMPLETED' && (
+                                  <div className="mt-1.5 flex items-center gap-1 text-xs font-medium text-green-700 dark:text-green-400">
+                                    <Calendar className="h-3 w-3" />
+                                    <span>Completed {format(new Date(task.statusChangedAt), 'MMM d, yyyy')}</span>
+                                  </div>
+                                )}
+
                                 {task.status === 'COMPLETED' && !task._isStrategic && task.endDate && (() => {
                                   const diffDays = Math.round(
                                     (new Date(task.statusChangedAt).getTime() - new Date(task.endDate).getTime())
