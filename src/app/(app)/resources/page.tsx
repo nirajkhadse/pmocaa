@@ -574,9 +574,9 @@ function calcTaskDailyHours(
 // A task/strategic-task is considered "active" on a given date when the date falls
 // within its start–end range (inclusive). Items without both dates can't be placed
 // on a specific day, so they're excluded from date-filtered views.
-function isActiveOnDate(startDate: string | null, endDate: string | null, date: string): boolean {
+function isActiveInRange(startDate: string | null, endDate: string | null, from: string, to: string): boolean {
   if (!startDate || !endDate) return false
-  return startDate.slice(0, 10) <= date && date <= endDate.slice(0, 10)
+  return startDate.slice(0, 10) <= to && endDate.slice(0, 10) >= from
 }
 
 // ─── Employee Detail Dialog ───────────────────────────────────────────────────
@@ -588,30 +588,34 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
   onLogMeeting: (r: Resource) => void
 }) {
   const [focusedId, setFocusedId] = useState<string | null>(null)
-  const [dateFilter, setDateFilter] = useState('')
-  const [dayResource, setDayResource] = useState<Resource | null>(null)
+  const [dateFilterFrom, setDateFilterFrom] = useState('')
+  const [dateFilterTo, setDateFilterTo] = useState('')
+  const [rangeResource, setRangeResource] = useState<Resource | null>(null)
   const [dayLoading, setDayLoading] = useState(false)
 
   // Reset focus + date filter when dialog closes or resource changes
   const handleOpenChange = (v: boolean) => {
-    if (!v) { setFocusedId(null); setDateFilter(''); setDayResource(null) }
+    if (!v) { setFocusedId(null); setDateFilterFrom(''); setDateFilterTo(''); setRangeResource(null) }
     onOpenChange(v)
   }
 
-  // Fetch day-scoped task data whenever the date filter changes
+  // Fetch range-scoped task data whenever both range endpoints are selected.
   useEffect(() => {
-    if (!dateFilter || !resource) { setDayResource(null); return }
+    if (!dateFilterFrom || !dateFilterTo || !resource || dateFilterFrom > dateFilterTo) {
+      setRangeResource(null)
+      return
+    }
     setDayLoading(true)
     setFocusedId(null)
-    fetch(`/api/resources?from=${dateFilter}&to=${dateFilter}`, { cache: 'no-store' })
+    fetch(`/api/resources?from=${dateFilterFrom}&to=${dateFilterTo}`, { cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         const match = Array.isArray(d) ? d.find((r: Resource) => r.id === resource.id) : null
-        setDayResource(match ?? null)
+        setRangeResource(match ?? null)
       })
-      .catch(() => setDayResource(null))
+      .catch(() => setRangeResource(null))
       .finally(() => setDayLoading(false))
-  }, [dateFilter, resource])
+  }, [dateFilterFrom, dateFilterTo, resource])
 
   // ALL hooks must be called before any early return (Rules of Hooks)
   const weekDates = useMemo(
@@ -631,24 +635,38 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
     return null
   }, [focusedId, resource, weekDates])
 
+  const isDateFiltered = !!dateFilterFrom && !!dateFilterTo && dateFilterFrom <= dateFilterTo
+  const filteredWorkingDates = useMemo(() => {
+    if (!isDateFiltered) return []
+    const dates: string[] = []
+    const current = new Date(`${dateFilterFrom}T12:00:00`)
+    const end = new Date(`${dateFilterTo}T12:00:00`)
+    while (current <= end) {
+      if (current.getDay() !== 0 && current.getDay() !== 6) dates.push(toDateKey(current))
+      current.setDate(current.getDate() + 1)
+    }
+    return dates
+  }, [dateFilterFrom, dateFilterTo, isDateFiltered])
+
   if (!resource) return null
 
   const utilBar = Math.min(resource.utilizationPct, 150)
   void utilBar
 
-  // When a date filter is active, scope every list to items active on that specific date
-  const isDateFiltered = !!dateFilter
   const ownedTasksForList = isDateFiltered
-    ? (dayResource?.ownedTasks ?? []).filter(t => isActiveOnDate(t.startDate, t.endDate, dateFilter))
+    ? (rangeResource?.ownedTasks ?? []).filter(t => isActiveInRange(t.startDate, t.endDate, dateFilterFrom, dateFilterTo))
     : resource.ownedTasks
   const strategicTasksForList = isDateFiltered
-    ? (dayResource?.strategicTasks ?? []).filter(t => isActiveOnDate(t.startDate, t.endDate, dateFilter))
+    ? (rangeResource?.strategicTasks ?? []).filter(t => isActiveInRange(t.startDate, t.endDate, dateFilterFrom, dateFilterTo))
     : (resource.strategicTasks ?? [])
   const meetingsForList = isDateFiltered
-    ? (dayResource?.meetings ?? [])
+    ? (rangeResource?.meetings ?? [])
     : (resource.meetings ?? [])
   const completedTasksForList = isDateFiltered
-    ? (dayResource?.completedTasks ?? []).filter(ct => ct.statusChangedAt?.slice(0, 10) === dateFilter)
+    ? (rangeResource?.completedTasks ?? []).filter(ct => {
+        const completed = ct.statusChangedAt?.slice(0, 10)
+        return !!completed && dateFilterFrom <= completed && completed <= dateFilterTo
+      })
     : (resource.completedTasks ?? [])
 
   // Hours logged on the filtered date — computed from each task's own date range rather than
@@ -657,11 +675,23 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
   const dayTotalHours = isDateFiltered
     ? Math.round((
         [...ownedTasksForList, ...strategicTasksForList].reduce(
-          (s, t) => s + (calcTaskDailyHours({ ...t, estimatedHours: t.estimatedHours || 0 }, [dateFilter])[dateFilter] ?? 0),
+          (sum, task) => sum + Object.values(
+            calcTaskDailyHours({ ...task, estimatedHours: task.estimatedHours || 0 }, filteredWorkingDates)
+          ).reduce((taskSum, hours) => taskSum + hours, 0),
           0
         ) + meetingsForList.reduce((s, m) => s + m.hours, 0)
       ) * 10) / 10
     : 0
+  const rangeHours = isDateFiltered
+    ? Math.round(Object.values(rangeResource?.dailyHoursMap ?? {}).reduce((sum, hours) => sum + hours, 0) * 10) / 10
+    : resource.thisWeekHours
+  const rangePeakHours = isDateFiltered
+    ? Math.round(Math.max(0, ...Object.values(rangeResource?.dailyHoursMap ?? {})) * 10) / 10
+    : resource.maxDailyHours
+  const rangeCapacityHours = isDateFiltered
+    ? Math.round(filteredWorkingDates.length * resource.dailyCapacityHours * 10) / 10
+    : resource.weeklyCapacityHours
+  const rangeUtilizationPct = rangeCapacityHours > 0 ? Math.round(rangeHours / rangeCapacityHours * 100) : 0
 
   const grouped: Record<string, AssignedTask[]> = {}
   for (const t of ownedTasksForList) {
@@ -714,19 +744,32 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
               Log Meeting
             </Button>
           </DialogTitle>
-          <div className="flex items-center gap-2 pt-1">
-            <label htmlFor="resource-date-filter" className="text-xs font-medium text-muted-foreground">
-              Filter by date:
+          <div className="flex items-end gap-2 pt-1 flex-wrap">
+            <span className="pb-2 text-xs font-medium text-muted-foreground">Filter by date range:</span>
+            <label htmlFor="resource-date-from" className="text-xs text-muted-foreground">
+              <span className="block mb-1">From</span>
+              <Input
+                id="resource-date-from"
+                type="date"
+                value={dateFilterFrom}
+                max={dateFilterTo || undefined}
+                onChange={e => setDateFilterFrom(e.target.value)}
+                className="h-8 w-[150px] text-xs"
+              />
             </label>
-            <Input
-              id="resource-date-filter"
-              type="date"
-              value={dateFilter}
-              onChange={e => setDateFilter(e.target.value)}
-              className="h-8 w-[170px] text-xs"
-            />
-            {dateFilter && (
-              <Button variant="ghost" size="sm" className="h-8 text-xs px-2" onClick={() => setDateFilter('')}>
+            <label htmlFor="resource-date-to" className="text-xs text-muted-foreground">
+              <span className="block mb-1">To</span>
+              <Input
+                id="resource-date-to"
+                type="date"
+                value={dateFilterTo}
+                min={dateFilterFrom || undefined}
+                onChange={e => setDateFilterTo(e.target.value)}
+                className="h-8 w-[150px] text-xs"
+              />
+            </label>
+            {(dateFilterFrom || dateFilterTo) && (
+              <Button variant="ghost" size="sm" className="h-8 text-xs px-2" onClick={() => { setDateFilterFrom(''); setDateFilterTo('') }}>
                 Clear
               </Button>
             )}
@@ -736,23 +779,23 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
         {/* Utilization summary */}
         <div className="grid grid-cols-4 gap-2 text-center py-2">
           <div className="border rounded-lg p-2">
-            <p className={`text-lg font-bold ${resource.isOverloadedWeekly ? 'text-red-600' : 'text-blue-600'}`}>
-              {resource.thisWeekHours}h
+            <p className={`text-lg font-bold ${rangeHours > rangeCapacityHours ? 'text-red-600' : 'text-blue-600'}`}>
+              {rangeHours}h
             </p>
-            <p className="text-xs text-muted-foreground">This week</p>
-            <p className="text-xs text-muted-foreground">cap {resource.weeklyCapacityHours}h</p>
+            <p className="text-xs text-muted-foreground">{isDateFiltered ? 'Selected range' : 'This week'}</p>
+            <p className="text-xs text-muted-foreground">cap {rangeCapacityHours}h</p>
           </div>
           <div className="border rounded-lg p-2">
-            <p className={`text-lg font-bold ${resource.isOverloadedDaily ? 'text-red-600' : 'text-orange-600'}`}>
-              {resource.maxDailyHours}h
+            <p className={`text-lg font-bold ${rangePeakHours > resource.dailyCapacityHours ? 'text-red-600' : 'text-orange-600'}`}>
+              {rangePeakHours}h
             </p>
             <p className="text-xs text-muted-foreground">Peak day</p>
             <p className="text-xs text-muted-foreground">cap {resource.dailyCapacityHours}h</p>
           </div>
           <div className="border rounded-lg p-2">
-            <p className="text-lg font-bold text-green-600">{resource.utilizationPct}%</p>
+            <p className="text-lg font-bold text-green-600">{isDateFiltered ? rangeUtilizationPct : resource.utilizationPct}%</p>
             <p className="text-xs text-muted-foreground">Utilized</p>
-            <p className="text-xs text-muted-foreground">weekly</p>
+            <p className="text-xs text-muted-foreground">{isDateFiltered ? 'selected range' : 'weekly'}</p>
           </div>
           <div className="border rounded-lg p-2">
             <p className="text-lg font-bold">{Math.round(totalHours)}h</p>
@@ -764,16 +807,16 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
         {/* Weekly bar */}
         <div className="space-y-1">
           <div className="flex justify-between text-xs">
-            <span className="text-muted-foreground">Weekly: {resource.thisWeekHours}h / {resource.weeklyCapacityHours}h</span>
-            {resource.isOverloadedWeekly && <span className="text-red-600 font-medium">OVER LIMIT</span>}
+            <span className="text-muted-foreground">{isDateFiltered ? 'Selected range' : 'Weekly'}: {rangeHours}h / {rangeCapacityHours}h</span>
+            {rangeHours > rangeCapacityHours && <span className="text-red-600 font-medium">OVER LIMIT</span>}
           </div>
           <Progress
-            value={Math.min(resource.thisWeekHours / Math.max(resource.weeklyCapacityHours, 1) * 100, 100)}
-            className={`h-2 ${resource.isOverloadedWeekly ? '[&>div]:bg-red-500' : resource.utilizationPct > 70 ? '[&>div]:bg-orange-500' : '[&>div]:bg-green-500'}`}
+            value={Math.min(rangeHours / Math.max(rangeCapacityHours, 1) * 100, 100)}
+            className={`h-2 ${rangeHours > rangeCapacityHours ? '[&>div]:bg-red-500' : rangeUtilizationPct > 70 ? '[&>div]:bg-orange-500' : '[&>div]:bg-green-500'}`}
           />
         </div>
 
-        {/* Day-by-day breakdown (hidden while a specific date is selected) */}
+        {/* Day-by-day breakdown (hidden while a custom range is selected) */}
         {!isDateFiltered && (
           <div>
             <div className="flex items-center justify-between mb-1.5">
@@ -837,7 +880,9 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
         {isDateFiltered && (
           <div className="border rounded-lg p-3 bg-muted/30 flex items-center justify-between">
             <p className="text-sm font-medium">
-              {new Date(dateFilter + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })}
+              {new Date(dateFilterFrom + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+              {' – '}
+              {new Date(dateFilterTo + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
             </p>
             <p className="text-xs text-muted-foreground">
               {dayLoading
@@ -925,7 +970,7 @@ function EmployeeDetailDialog({ resource, open, onOpenChange, onLogMeeting }: {
            Object.keys(grouped).length === 0 && strategicTasksForList.length === 0 &&
            meetingsForList.length === 0 && completedTasksForList.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">
-              No tasks, meetings, or completions on this date
+              No tasks, meetings, or completions in this date range
             </div>
           ) : Object.keys(grouped).length === 0 && !isDateFiltered ? (
             <div className="text-center py-8 text-muted-foreground text-sm">No active tasks assigned</div>
