@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { ClipboardCheck, Clock, Calendar } from 'lucide-react'
+import { ClipboardCheck, Clock, Calendar, Check, Users } from 'lucide-react'
 
 interface User {
   id: string; name: string; role: string; capacityPct: number
@@ -42,7 +42,7 @@ export function AssignWorkDialog({ open, onOpenChange, prefillUserId, prefillNam
 
   const [title,           setTitle]           = useState('')
   const [description,     setDescription]     = useState('')
-  const [assigneeId,      setAssigneeId]      = useState(prefillUserId ?? '')
+  const [assigneeIds,     setAssigneeIds]     = useState<string[]>(prefillUserId ? [prefillUserId] : [])
   const [estimatedHours,  setEstimatedHours]  = useState('')
   const [startDate,       setStartDate]       = useState('')
   const [endDate,         setEndDate]         = useState('')
@@ -54,12 +54,12 @@ export function AssignWorkDialog({ open, onOpenChange, prefillUserId, prefillNam
   }, [open])
 
   useEffect(() => {
-    if (prefillUserId) setAssigneeId(prefillUserId)
+    if (prefillUserId) setAssigneeIds([prefillUserId])
   }, [prefillUserId])
 
   async function submit() {
     if (!title.trim()) { toast.error('Task title is required'); return }
-    if (!assigneeId)   { toast.error('Please select an assignee'); return }
+    if (assigneeIds.length === 0) { toast.error('Please select at least one assignee'); return }
     if (!endDate)      { toast.error('Due date is required'); return }
 
     setSubmitting(true)
@@ -67,12 +67,12 @@ export function AssignWorkDialog({ open, onOpenChange, prefillUserId, prefillNam
       const res = await fetch('/api/assignments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: title, description, ownerId: assigneeId, estimatedHours: estimatedHours || null, startDate: startDate || null, endDate, priority }),
+        body: JSON.stringify({ name: title, description, ownerIds: assigneeIds, estimatedHours: estimatedHours || null, startDate: startDate || null, endDate, priority }),
       })
       if (!res.ok) throw new Error((await res.json()).error || 'Failed')
-      toast.success('Work assigned and person notified')
+      toast.success(`Work assigned to ${assigneeIds.length} ${assigneeIds.length === 1 ? 'person' : 'people'}`)
       setTitle(''); setDescription(''); setEstimatedHours(''); setStartDate(''); setEndDate(''); setPriority('MEDIUM')
-      if (!prefillUserId) setAssigneeId('')
+      if (!prefillUserId) setAssigneeIds([])
       onOpenChange(false)
       onAssigned?.()
     } catch (e: unknown) {
@@ -80,7 +80,11 @@ export function AssignWorkDialog({ open, onOpenChange, prefillUserId, prefillNam
     } finally { setSubmitting(false) }
   }
 
-  const selected = users.find(u => u.id === assigneeId)
+  const selectedUsers = users.filter(u => assigneeIds.includes(u.id))
+  const selected = selectedUsers[0]
+  const hoursPerPerson = estimatedHours && assigneeIds.length > 0
+    ? parseFloat(estimatedHours) / assigneeIds.length
+    : 0
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -95,7 +99,7 @@ export function AssignWorkDialog({ open, onOpenChange, prefillUserId, prefillNam
         <div className="space-y-4">
           {/* Assignee picker */}
           <div className="space-y-1.5">
-            <Label>Assign to *</Label>
+            <Label>Assign to * <span className="font-normal text-muted-foreground">(select one or more)</span></Label>
             {prefillUserId && prefillName ? (
               <div className="flex items-center gap-2 p-2 bg-muted rounded-lg">
                 <Avatar className="h-7 w-7">
@@ -104,7 +108,7 @@ export function AssignWorkDialog({ open, onOpenChange, prefillUserId, prefillNam
                 <span className="text-sm font-medium">{prefillName}</span>
               </div>
             ) : (
-              <Select value={assigneeId} onValueChange={(v) => { const s = v as string | null; if (s) setAssigneeId(s) }}>
+              <Select value="" onValueChange={(v) => { const s = v as string | null; if (s) setAssigneeIds((previous) => previous.includes(s) ? previous : [...previous, s]) }}>
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Pick a team member…" />
                 </SelectTrigger>
@@ -123,7 +127,17 @@ export function AssignWorkDialog({ open, onOpenChange, prefillUserId, prefillNam
                 </SelectContent>
               </Select>
             )}
-            {selected && !prefillUserId && (
+            {!prefillUserId && selectedUsers.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {selectedUsers.map((person) => (
+                  <button key={person.id} type="button" onClick={() => setAssigneeIds((previous) => previous.filter((id) => id !== person.id))}
+                    className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+                    <Check className="h-3 w-3" /> {person.name} <span aria-hidden>×</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedUsers.length > 0 && !prefillUserId && (
               <p className="text-xs text-muted-foreground">
                 {ROLE_LABELS[selected.role]} · {selected.capacityPct}% capacity
                 {selected.title && ` · ${selected.title}`}
@@ -182,10 +196,10 @@ export function AssignWorkDialog({ open, onOpenChange, prefillUserId, prefillNam
           </div>
 
           {/* Summary chip */}
-          {estimatedHours && endDate && (
+          {estimatedHours && endDate && assigneeIds.length > 0 && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950 rounded-lg px-3 py-2">
-              <Clock className="h-3.5 w-3.5 text-blue-500" />
-              <span><strong>{estimatedHours}h</strong> of work · due <strong>{new Date(endDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</strong></span>
+              <Users className="h-3.5 w-3.5 text-blue-500" />
+              <span><strong>{estimatedHours}h total</strong> · <strong>{hoursPerPerson.toFixed(2)}h each</strong> across {assigneeIds.length} {assigneeIds.length === 1 ? 'person' : 'people'} · due <strong>{new Date(endDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</strong></span>
             </div>
           )}
 

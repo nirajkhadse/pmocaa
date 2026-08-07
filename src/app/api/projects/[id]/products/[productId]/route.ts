@@ -141,6 +141,64 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       const modelNo = productRecord?.modelNo ?? ''
       const productLabel = `${brand}${modelNo ? ` ${modelNo}` : ''}`
 
+      // Sync teardown subsystem assignments. A subsystem may be selected for multiple
+      // resources; each person receives an identical linked task with an equal share
+      // of the template hours. Work already in progress is preserved unchanged.
+      if (proj?.category) {
+        const teardownTemplates = CATEGORY_TEMPLATES[proj.category]
+          ?.find((workstream) => workstream.name === 'Tear Down')?.tasks ?? []
+        if (teardownTemplates.length > 0) {
+          const existingTeardownWs = await prisma.workstream.findFirst({ where: { projectId: id, name: 'Tear Down' } })
+          const teardownWs = existingTeardownWs ?? await prisma.workstream.create({
+            data: { projectId: id, name: 'Tear Down', order: await prisma.workstream.count({ where: { projectId: id } }) },
+          })
+          const progressedTasks = await prisma.task.findMany({
+            where: {
+              workstreamId: teardownWs.id,
+              description: `__productTask:${productId}:teardown__`,
+              status: { notIn: ['BACKLOG', 'PLANNED'] },
+            },
+            select: { name: true },
+          })
+          const progressedNames = new Set(progressedTasks.map((task) => task.name))
+          await prisma.task.deleteMany({
+            where: {
+              workstreamId: teardownWs.id,
+              description: `__productTask:${productId}:teardown__`,
+              status: { in: ['BACKLOG', 'PLANNED'] },
+            },
+          })
+
+          const teardownAnchor = proj.startDate ? addWorkingDays(new Date(proj.startDate), 2) : null
+          const teardownDates = teardownAnchor ? sequenceTasks(teardownTemplates, teardownAnchor) : []
+          const taskRows = teardownTemplates.flatMap((templateTask, index) => {
+            const taskName = `${productLabel} — ${templateTask.name}`
+            if (progressedNames.has(taskName)) return []
+            const assignedUserIds = [...new Set(
+              newResources
+                .filter((resource) => resource.subsystems?.includes(templateTask.name))
+                .map((resource) => resource.userId)
+            )]
+            const owners: Array<string | null> = assignedUserIds.length > 0
+              ? assignedUserIds
+              : [data.leadId || current.leadId || null]
+            const hoursPerPerson = templateTask.estimatedHours / owners.length
+            return owners.map((assignedOwnerId) => ({
+              workstreamId: teardownWs.id,
+              name: taskName,
+              description: `__productTask:${productId}:teardown__`,
+              ownerId: assignedOwnerId,
+              assignedById: session.id,
+              startDate: teardownDates[index]?.startDate ?? null,
+              endDate: teardownDates[index]?.endDate ?? null,
+              estimatedHours: hoursPerPerson,
+              effortHours: 0,
+            }))
+          })
+          if (taskRows.length > 0) await prisma.task.createMany({ data: taskRows })
+        }
+      }
+
       if (bobWs) {
           await prisma.task.deleteMany({
             where: { workstreamId: bobWs.id, description: { contains: `__productTask:${productId}:` } },

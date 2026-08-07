@@ -45,33 +45,41 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: 'Forbidden' }, { status: 403 })
 
     const data = await req.json()
-    const { name, description, ownerId, estimatedHours, startDate, endDate, priority } = data
+    const { name, description, ownerId, ownerIds, estimatedHours, startDate, endDate, priority } = data
+    const assigneeIds = Array.from(new Set(
+      (Array.isArray(ownerIds) ? ownerIds : [ownerId])
+        .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    ))
 
-    if (!name || !ownerId)
-      return Response.json({ error: 'name and ownerId are required' }, { status: 400 })
+    if (!name || assigneeIds.length === 0)
+      return Response.json({ error: 'name and at least one assignee are required' }, { status: 400 })
 
     const workstream = await getOrCreateDirectWorkstream(session.id)
 
-    const task = await prisma.task.create({
-      data: {
-        name,
-        description: description || null,
-        workstreamId: workstream.id,
-        ownerId,
-        assignedById: session.id,
-        priority: priority || 'MEDIUM',
-        status: 'PLANNED',
-        estimatedHours: estimatedHours ? parseFloat(estimatedHours) : 0,
-        startDate: startDate ? new Date(startDate) : null,
-        endDate: endDate ? new Date(endDate) : null,
-      },
-      include: {
-        owner: { select: { id: true, name: true, avatarUrl: true } },
-      },
-    })
+    const totalHours = estimatedHours ? parseFloat(String(estimatedHours)) : 0
+    const hoursPerPerson = totalHours / assigneeIds.length
+    const tasks = await prisma.$transaction(
+      assigneeIds.map((assigneeId) => prisma.task.create({
+        data: {
+          name,
+          description: description || null,
+          workstreamId: workstream.id,
+          ownerId: assigneeId,
+          assignedById: session.id,
+          priority: priority || 'MEDIUM',
+          status: 'PLANNED',
+          estimatedHours: hoursPerPerson,
+          startDate: startDate ? new Date(startDate) : null,
+          endDate: endDate ? new Date(endDate) : null,
+        },
+        include: {
+          owner: { select: { id: true, name: true, avatarUrl: true } },
+        },
+      }))
+    )
 
     // Notify the assignee
-    if (ownerId !== session.id) {
+    if (ownerId && ownerId !== session.id && !Array.isArray(ownerIds)) {
       await prisma.notification.create({
         data: {
           userId: ownerId,
@@ -89,7 +97,23 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    return Response.json(task, { status: 201 })
+    if (Array.isArray(ownerIds)) {
+      const notificationUserIds = assigneeIds.filter((id) => id !== session.id)
+      if (notificationUserIds.length > 0) {
+        await prisma.notification.createMany({
+          data: notificationUserIds.map((userId) => ({
+            userId,
+            senderId: session.id,
+            type: 'TASK_ASSIGNED' as const,
+            title: 'Work Assigned to You',
+            message: `${session.name} assigned you: "${name}"${totalHours ? ` (${hoursPerPerson}h of ${totalHours}h)` : ''}${endDate ? ` · due ${new Date(endDate).toLocaleDateString()}` : ''}`,
+            actionUrl: '/kanban',
+          })),
+        }).catch((error) => console.error('[ASSIGNMENT NOTIFICATION]', error))
+      }
+    }
+
+    return Response.json({ tasks, totalHours, hoursPerPerson }, { status: 201 })
   } catch (err: unknown) {
     if (err instanceof Error && err.message === 'Unauthorized')
       return Response.json({ error: 'Unauthorized' }, { status: 401 })

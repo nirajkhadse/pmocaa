@@ -158,16 +158,26 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       const tdEnd = project.startDate ? addWorkingDays(new Date(project.startDate), 6) : null
       const productLabel = `${product.brand}${product.modelNo ? ` ${product.modelNo}` : ''}`
       await prisma.task.createMany({
-        data: tdTaskTemplates.map((task) => ({
-          workstreamId: tdWs.id,
-          name: `${productLabel} — ${task.name}`,
-          description: `__productTask:${product.id}:teardown__`,
-          ownerId: product.leadId ?? null,
-          startDate: tdStart,
-          endDate: tdEnd,
-          estimatedHours: task.estimatedHours,
-          effortHours: 0,
-        })),
+        data: tdTaskTemplates.flatMap((task) => {
+          const assignedUserIds = [...new Set(
+            resources.filter((resource) => resource.subsystems?.includes(task.name)).map((resource) => resource.userId)
+          )]
+          const owners: Array<string | null> = assignedUserIds.length > 0
+            ? assignedUserIds
+            : [product.leadId ?? null]
+          const hoursPerPerson = task.estimatedHours / owners.length
+          return owners.map((assignedOwnerId) => ({
+            workstreamId: tdWs.id,
+            name: `${productLabel} — ${task.name}`,
+            description: `__productTask:${product.id}:teardown__`,
+            ownerId: assignedOwnerId,
+            assignedById: session.id,
+            startDate: tdStart,
+            endDate: tdEnd,
+            estimatedHours: hoursPerPerson,
+            effortHours: 0,
+          }))
+        }),
       })
     }
 

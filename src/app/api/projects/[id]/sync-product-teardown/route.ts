@@ -25,7 +25,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
             brand: true,
             modelNo: true,
             leadId: true,
-            resources: { select: { userId: true, costingTypes: true } },
+            resources: { select: { userId: true, subsystems: true, costingTypes: true } },
           },
           orderBy: { order: 'asc' },
         },
@@ -81,16 +81,25 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
           tdWs = created
         }
         await prisma.task.createMany({
-          data: tdTaskTemplates.map((task, i) => ({
-            workstreamId: tdWs!.id,
-            name: `${productLabel} — ${task.name}`,
-            description: `__productTask:${product.id}:teardown__`,
-            ownerId: product.leadId ?? null,
-            startDate: tdTemplateDates[i]?.startDate ?? null,
-            endDate: tdTemplateDates[i]?.endDate ?? null,
-            estimatedHours: task.estimatedHours,
-            effortHours: 0,
-          })),
+          data: tdTaskTemplates.flatMap((task, i) => {
+            const assignedUserIds = [...new Set(
+              product.resources.filter((resource) => resource.subsystems.includes(task.name)).map((resource) => resource.userId)
+            )]
+            const owners: Array<string | null> = assignedUserIds.length > 0
+              ? assignedUserIds
+              : [product.leadId ?? null]
+            const hoursPerPerson = task.estimatedHours / owners.length
+            return owners.map((assignedOwnerId) => ({
+              workstreamId: tdWs!.id,
+              name: `${productLabel} — ${task.name}`,
+              description: `__productTask:${product.id}:teardown__`,
+              ownerId: assignedOwnerId,
+              startDate: tdTemplateDates[i]?.startDate ?? null,
+              endDate: tdTemplateDates[i]?.endDate ?? null,
+              estimatedHours: hoursPerPerson,
+              effortHours: 0,
+            }))
+          }),
         })
         migrated++
       }

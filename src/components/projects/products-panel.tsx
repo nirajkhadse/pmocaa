@@ -242,19 +242,23 @@ function ProductDetailView({
           </div>
           <div className="rounded-lg border border-border divide-y divide-border">
             {subsystems.map((sub) => {
-              const assigned = product.resources.find((r) => r.subsystems.includes(sub))
+              const assignedResources = product.resources.filter((r) => r.subsystems.includes(sub))
               return (
                 <div key={sub} className="flex items-center gap-3 px-3 py-2.5">
                   <div className="h-2 w-2 rounded-full shrink-0 bg-blue-500" />
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium">{sub}</span>
                   </div>
-                  {assigned ? (
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <div className="h-5 w-5 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-[9px] font-bold text-blue-700 dark:text-blue-300">
-                        {assigned.user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
-                      </div>
-                      <span className="text-xs text-muted-foreground hidden sm:inline">{assigned.user.name.split(' ')[0]}</span>
+                  {assignedResources.length > 0 ? (
+                    <div className="flex items-center justify-end gap-1.5 shrink-0 flex-wrap">
+                      {assignedResources.map((assigned) => (
+                        <div key={assigned.id} className="flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 dark:bg-blue-950/40">
+                          <div className="h-5 w-5 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center text-[9px] font-bold text-blue-700 dark:text-blue-300">
+                            {assigned.user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
+                          </div>
+                          <span className="text-xs text-muted-foreground hidden sm:inline">{assigned.user.name.split(' ')[0]}</span>
+                        </div>
+                      ))}
                     </div>
                   ) : (
                     <span className="text-xs text-muted-foreground italic">Unassigned</span>
